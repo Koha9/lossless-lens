@@ -1,0 +1,27 @@
+# Python and local environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+.coverage
+htmlcov/
+
+# Local editor settings and credentials
+.vscode/
+.idea/
+.env
+.env.*
+!.env.example
+
+# Private audio fixtures and generated analysis outputs
+TEST_MUSIC/
+flac_analysis.csv
+reports/
+artifacts/
+*.log
+
+# OS files
+Thumbs.db
+.DS_Store
