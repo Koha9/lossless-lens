@@ -146,6 +146,9 @@ class WebTests(unittest.TestCase):
                 self.assertEqual(data["info"]["bit_depth"], bits)
                 peak = int(np.argmax(data["spectrum"]["relative_db"]))
                 self.assertAlmostEqual(data["spectrum"]["frequency_khz"][peak], 3, delta=.02)
+                if codec not in {"alac", "wavpack"}:
+                    self.assertEqual(data["forensics"]["status"], "lossy")
+                    self.assertIsNone(data["forensics"]["score"])
                 if codec == "alac":
                     self.assertEqual(data["info"]["subtype"], "ALAC")
                     self.assertEqual(data["info"]["decoder"], "ffmpeg")

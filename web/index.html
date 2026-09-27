@@ -8,6 +8,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='10' fill='%23101519'/%3E%3Cpath d='M8 20h4m3-8v16m5-22v28m5-24v20m5-13v6' stroke='%23b8f078' stroke-width='3'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/static/styles.css">
   <script defer src="/vendor/plotly.min.js"></script>
+  <script defer src="/static/library-model.js"></script>
   <script defer src="/static/app.js"></script>
 </head>
 <body>
@@ -25,9 +26,11 @@
       </form>
       <label class="search-field"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="搜索曲名或文件夹…" aria-label="搜索曲目"></label>
       <div class="library-views"><div class="library-switch" role="group" aria-label="曲库显示方式"><button id="view-tree" type="button" class="active" aria-pressed="true">目录树</button><button id="view-list" type="button" aria-pressed="false">列表</button></div><div id="tree-actions"><button id="expand-folders" class="text-button" type="button">展开</button><span aria-hidden="true"> / </span><button id="collapse-folders" class="text-button" type="button">折叠</button></div></div>
-      <div class="list-actions"><span id="selection-count">已选 0 / 4</span><button id="clear-selection" class="text-button" type="button">清空选择</button></div>
+      <div class="list-actions"><label class="select-all-label"><input id="select-all" type="checkbox">全部文件</label><span id="selection-count">已选 0 首</span><button id="clear-selection" class="text-button" type="button">清空选择</button></div>
+      <div class="result-key" aria-label="分析颜色图例"><span>灰：未分析</span><span class="risk-gradient"></span><span>绿：低 → 红：高</span></div>
+      <p class="score-help">特征评分 0–100，非真伪概率。文件夹勾选包含全部子文件。</p>
       <div id="track-list" class="track-list"><p class="library-empty">扫描文件夹后，在这里勾选曲目。</p></div>
-      <div class="library-footer"><button id="compare" class="primary-button" disabled>生成对比 <span aria-hidden="true">↗</span></button><p id="selection-help">2D 模式可选择 1–4 首曲目</p></div>
+      <div class="library-footer"><button id="analyze-selected" class="primary-button" disabled>分析所选</button><button id="stop-analysis" class="secondary-button" hidden>停止后续分析</button><button id="compare" class="secondary-button compare-button" disabled>生成对比 <span aria-hidden="true">↗</span></button><p id="selection-help">批量分析不限数量 · 2D 对比最多 4 首</p></div>
     </aside>
     <main>
       <div class="page-heading"><div><p class="eyebrow accent">SPECTRAL WORKSPACE / 01</p><h1>听见细节，看见差异<span>.</span></h1><p class="subtitle">在同一尺度下，探索音频的频率与时间。</p></div><a class="guide-link" href="#methodology">如何阅读图表 <span aria-hidden="true">↗</span></a></div>
@@ -37,17 +40,19 @@
       </section>
       <div id="three-controls" class="three-controls" hidden><label>层间距 <input id="layer-gap" type="range" min="0.5" max="2" step="0.1" value="1.1"></label><label>时频图不透明度 <input id="opacity" type="range" min="0.25" max="1" step="0.05" value="0.85"></label><span>拖动旋转 · 滚轮缩放</span><button id="reset-camera" class="text-button">重置视角 ↺</button></div>
       <div id="status" class="status" role="status" aria-live="polite">正在连接本地分析服务…</div>
+      <div id="analysis-progress" class="analysis-progress" hidden><span id="analysis-progress-text" role="status" aria-live="polite"></span><progress id="analysis-meter" value="0" max="1" aria-label="批量分析进度"></progress></div>
       <div id="legend" class="track-legend" aria-label="当前图表曲目"></div>
-      <div id="empty-state" class="empty-state"><div class="empty-graphic" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div><p class="eyebrow">EVERY TRACK HAS A SIGNATURE</p><h2>从选择曲目开始</h2><p>扫描左侧文件夹，勾选曲目并生成对比。<br>频谱与时频图将在这里呈现。</p></div>
+      <div id="empty-state" class="empty-state"><div class="empty-graphic" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div><p class="eyebrow">EVERY TRACK HAS A SIGNATURE</p><h2>从选择曲目开始</h2><p>勾选文件或整个文件夹，点击「分析所选」。<br>筛查结果直接显示在文件树上；少量曲目可生成频谱对比。</p></div>
       <div id="charts" hidden>
         <section class="chart-panel"><div class="panel-heading"><div class="panel-title"><span class="section-number">01</span><div><h2>频率响应 <span>Frequency spectrum</span></h2><p>Relative magnitude — Frequency · 全曲平均功率，峰值归一化</p></div></div><button id="export-spectrum" class="secondary-button" type="button">导出 PNG ↓</button></div><div id="spectrum-plot" class="spectrum-plot" aria-label="相对幅度与频率对比图"></div></section>
         <section class="chart-panel"><div class="panel-heading"><div class="panel-title"><span class="section-number">02</span><div><h2>时频分布 <span>Spectrogram</span></h2><p id="spectrogram-caption">Frequency — Time · 相同频率、时间范围与色阶</p></div></div><button id="export-spectrogram" class="secondary-button" type="button">导出 PNG ↓</button></div><div id="spectrogram-plot" class="spectrogram-plot" aria-label="频率与时间对比图"></div><div class="panel-footnote"><span class="scale-key"></span>颜色表示各曲目相对峰值的功率 dB，数值越接近 0，能量越强。</div></section>
         <section class="summary-panel"><div class="summary-heading"><h2>曲目摘要</h2><span>当前图表中的曲目 · 全曲分析</span></div><div class="table-scroll"><table><thead><tr><th>曲目</th><th>采样率 / 位深或编码</th><th>时长</th><th>99% 能量边界</th><th>疑似高频截止</th></tr></thead><tbody id="summary-body"></tbody></table></div></section>
       </div>
-      <details id="methodology" class="methodology"><summary>读图说明与分析口径 <span>＋</span></summary><div><p><strong>频谱：</strong>整首音频使用 Hann 窗、最多 8192 点 FFT、50% 重叠；先分别计算每个声道的功率，再平均，避免反相立体声被抵消。平均功率转换为相对 dB，每首歌的频谱峰值为 0 dB。</p><p><strong>时频图：</strong>横轴为时间，纵轴为频率，颜色表示相对功率。全曲压缩到最多 320 个时间格和 513 个频率格，每格保留最大能量；3D 再压缩至最多 128 × 129 格以保持交互流畅。悬停读数代表显示格，不代表未压缩的瞬时值。</p><p><strong>对比：</strong>2D 叠加频谱并分面显示时频图；3D 将曲目放在独立层上，时频图高度表示曲目编号，不是响度。使用相同坐标范围和 −120 至 0 dB 色阶；较短曲目、较低采样率以外的区域为空。可切换为相对进度对齐不同长度曲目。</p><p><strong>归一化与限制：</strong>频谱与时频图分别按各曲目的各自峰值归一化，因此适合比较形状，不能用于比较绝对响度。静音显示为底噪色并单独标记。截止频率沿用项目的启发式检测；低通、老录音或母带处理也会造成截止，不能单凭图表判断有损转无损。此页面提供频谱摘要，不代替 CLI 的位深和完整鉴定报告。</p></div></details>
+      <details id="methodology" class="methodology"><summary>读图说明与分析口径 <span>＋</span></summary><div><p><strong>频谱：</strong>整首音频使用 Hann 窗、最多 8192 点 FFT、50% 重叠；先分别计算每个声道的功率，再平均，避免反相立体声被抵消。平均功率转换为相对 dB，每首歌的频谱峰值为 0 dB。</p><p><strong>时频图：</strong>横轴为时间，纵轴为频率，颜色表示相对功率。全曲压缩到最多 320 个时间格和 513 个频率格，每格保留最大能量；3D 再压缩至最多 128 × 129 格以保持交互流畅。悬停读数代表显示格，不代表未压缩的瞬时值。</p><p><strong>对比：</strong>2D 叠加频谱并分面显示时频图；3D 将曲目放在独立层上，时频图高度表示曲目编号，不是响度。使用相同坐标范围和 −120 至 0 dB 色阶；较短曲目、较低采样率以外的区域为空。可切换为相对进度对齐不同长度曲目。</p><p><strong>归一化与限制：</strong>频谱与时频图分别按各曲目的各自峰值归一化，因此适合比较形状，不能用于比较绝对响度。静音显示为底噪色并单独标记。截止频率沿用项目的启发式检测；低通、老录音或母带处理也会造成截止，不能单凭图表判断有损转无损。文件树评分综合高频截止、16-bit 网格补零与高采样率低带宽特征，35 分及以上标为可疑；它是可解释的启发式特征强度，不是经过校准的真伪概率。绿色仅表示本次未检测出明显特征，不保证来源真实。静音、短音频、未知编码与已知有损编码单独标注。结果保留到重新扫描或刷新页面；文件夹颜色取已完成子文件最高评分，并显示完成数量。</p></div></details>
       <footer class="page-footer"><span>FLAC LAB <span class="muted">/</span> Inspect the spectrum.</span><span>音频仅在本机读取 · 不上传云端</span></footer>
     </main>
   </div>
+  <dialog id="report-dialog" aria-labelledby="report-title"><div class="export-heading"><h2 id="report-title">分析详情</h2><button id="close-report" class="secondary-button" type="button">关闭 ×</button></div><div class="report-content"><p id="report-path"></p><p id="report-verdict"></p><ul id="report-reasons"></ul><p class="score-help">绿色表示本次未检测出明显特征，不代表确认真实无损。重新扫描或刷新页面将清除结果。</p></div></dialog>
   <dialog id="export-dialog" aria-labelledby="export-title"><div class="export-heading"><h2 id="export-title">PNG 预览</h2><button id="close-export" class="secondary-button" type="button">关闭 ×</button></div><img id="export-image" alt="当前对比图表的 PNG 导出预览"><div class="export-actions"><a id="export-download" class="primary-button" download>保存 PNG ↓</a><p>若内置浏览器未弹出下载，可右键图片保存，或在外部浏览器打开本地页面。</p></div></dialog>
 </body>
 </html>

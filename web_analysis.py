@@ -12,6 +12,7 @@ import numpy as np
 from audio_formats import open_plot_audio
 
 from flac_forensics import _estimate_cutoff, _spectral_edge
+from web_forensics import PaddingEvidence, assess_features
 
 FFT_SIZE = 8192
 TIME_BINS = 320
@@ -19,7 +20,7 @@ FREQUENCY_BINS = 513
 FLOOR_DB = -120
 
 
-def build_plot_data(path: Path) -> dict:
+def build_plot_data(path: Path, *, include_plots=True) -> dict:
     with open_plot_audio(path) as (audio, source):
         if audio.frames < 32:
             raise ValueError("音频过短：至少需要 32 个采样点。")
@@ -39,9 +40,12 @@ def build_plot_data(path: Path) -> dict:
         time_counts = np.zeros(n_columns, dtype=int)
         psd_sum = np.zeros(len(frequencies))
         count = 0
+        padding = PaddingEvidence(source.get("bit_depth"))
         for block in audio.blocks(blocksize=nfft, overlap=nfft-hop, dtype="float64", always_2d=True):
             if not np.isfinite(block).all():
                 raise ValueError("音频包含非有限采样值，无法绘图。")
+            # Count each sample once despite overlapping FFT windows.
+            padding.add(block if count == 0 else block[hop:])
             if len(block) < nfft:
                 block = np.pad(block, ((0, nfft-len(block)), (0, 0)))
             power = np.mean(np.abs(np.fft.rfft(block * window[:, None], axis=0)) ** 2, axis=1) / scale
@@ -69,7 +73,7 @@ def build_plot_data(path: Path) -> dict:
                 row[int(column)] = None
         cutoff, confidence, notes = _estimate_cutoff(frequencies, psd_db, sr / 2)
         # Spectrum remains at native FFT resolution for accurate peak hover.
-        return {
+        result = {
             "name": path.name,
             "info": {
                 "sample_rate": sr, "channels": channels, "frames": frames,
@@ -98,3 +102,7 @@ def build_plot_data(path: Path) -> dict:
                 "normalization": "per_track_peak", "floor_db": FLOOR_DB,
             },
         }
+        result["forensics"] = assess_features(result["info"], result["summary"], padding.fraction)
+        if not include_plots:
+            del result["spectrum"], result["spectrogram"]
+        return result

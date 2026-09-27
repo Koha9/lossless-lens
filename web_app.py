@@ -32,6 +32,7 @@ def create_app(default_folder: Path = BASE_DIR) -> FastAPI:
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1", "[::1]", "testserver"])
     registry: dict[str, Path] = {}
     cache: OrderedDict = OrderedDict()
+    summaries: dict = {}
     lock = threading.RLock()
     analysis_lock = threading.Lock()
 
@@ -69,12 +70,12 @@ def create_app(default_folder: Path = BASE_DIR) -> FastAPI:
                 registry.clear()
                 registry.update(found)
                 cache.clear()
+                summaries.clear()
             return {"folder": str(folder), "tracks": entries}
         except (OSError, ValueError) as exc:
             raise HTTPException(400, f"无法扫描文件夹：{exc}") from exc
 
-    @app.get("/api/tracks/{track_id}")
-    def plot_data(track_id: str):
+    def analyze(track_id: str, include_plots: bool):
         with lock:
             path = registry.get(track_id)
         if path is None:
@@ -87,15 +88,35 @@ def create_app(default_folder: Path = BASE_DIR) -> FastAPI:
                 with lock:
                     if key in cache:
                         cache.move_to_end(key)
-                        return cache[key]
-                result = {"id": track_id, **build_plot_data(path)}
+                        return cache[key] if include_plots else summaries[key]
+                    if not include_plots and key in summaries:
+                        return summaries[key]
+                result = {"id": track_id, **build_plot_data(path, include_plots=include_plots)}
+                after = path.stat()
+                if (after.st_size, after.st_mtime_ns) != (stat.st_size, stat.st_mtime_ns):
+                    raise ValueError("文件在分析过程中发生变化，请重试。")
                 with lock:
-                    cache[key] = result
-                    while len(cache) > 12:
-                        cache.popitem(last=False)
+                    if registry.get(track_id) == path:
+                        for old_key in list(summaries):
+                            if old_key[0] == track_id:
+                                del summaries[old_key]
+                                cache.pop(old_key, None)
+                        summaries[key] = {k: v for k, v in result.items() if k not in {"spectrum", "spectrogram"}}
+                        if include_plots:
+                            cache[key] = result
+                            while len(cache) > 12:
+                                cache.popitem(last=False)
                 return result
         except (OSError, RuntimeError, ValueError) as exc:
             raise HTTPException(422, f"无法分析 {path.name}：{exc}") from exc
+
+    @app.get("/api/tracks/{track_id}/analysis")
+    def forensic_data(track_id: str):
+        return analyze(track_id, include_plots=False)
+
+    @app.get("/api/tracks/{track_id}")
+    def plot_data(track_id: str):
+        return analyze(track_id, include_plots=True)
 
     @app.get("/vendor/plotly.min.js")
     def plotly_js():

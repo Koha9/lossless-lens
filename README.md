@@ -2,6 +2,14 @@
 
 一个用于筛查 FLAC / PCM 是否存在“有损转无损”或“升采样”迹象的小工具。
 
+## about AIe
+
+Most of this project was written by Codex GPT-6 in about 30 minutes.
+
+I gave it the general requirements and did a quick sanity check on the core logic, but most of the code has not been reviewed in detail.
+
+It seems to work for what I needed it for, but keep the above in mind if you're planning to rely on it for anything important.
+
 ## 文件
 
 - `flac_forensics.ipynb`：文件夹批量分析的交互入口
@@ -17,7 +25,7 @@ pip install -r requirements.txt
 
 如果 `soundfile` 安装后仍无法读取 FLAC，请确保系统有 `libsndfile`。
 
-## Web UI：频谱与时频对比
+## Web UI：勾选分析与频谱对比
 
 在 `flac-forensics` 环境安装 Web 依赖并启动（PowerShell）：
 
@@ -28,9 +36,13 @@ pip install -r requirements.txt
 
 打开 http://127.0.0.1:8765 。不传 `--folder` 时默认扫描本项目目录；端口可通过 `--port 8766` 更改。其他机器上使用项目环境内的 Python 运行同样的脚本即可。
 
-- 输入本机可访问的音频文件夹（也支持 UNC 路径），递归扫描 FLAC、WAV/WAVE、AIFF/AIFC、MP3/MP2、M4A/M4B、AAC、OGG/OGA、Opus、WMA、APE、WavPack（WV）和 CAF。首次打开自动用前两首生成预览。
+- 输入本机可访问的音频文件夹（也支持 UNC 路径），递归扫描 FLAC、WAV/WAVE、AIFF/AIFC、MP3/MP2、M4A/M4B、AAC、OGG/OGA、Opus、WMA、APE、WavPack（WV）和 CAF。首次打开只扫描目录，不自动分析文件。
 - 曲库默认采用紧凑目录树，文件夹可展开／折叠，数字显示曲目数及已选数量。提供「目录树／列表」切换和全部展开／折叠；切换保留勾选，显示偏好保存在当前浏览器。搜索自动展开匹配的目录，清除搜索后恢复原来的展开状态。
-- 在左侧勾选曲目，点击「生成对比」。支持搜索曲名或文件夹；解码失败会单独标出，不会影响其他曲目。
+- 勾选单个文件、整个文件夹或「全部文件」，点击「分析所选」；批量分析不受 2D / 3D 曲目数限制。父目录支持全选／半选，递归包含子目录。**搜索只过滤显示，勾选文件夹仍包含搜索隐藏的子文件**；「全部文件」也作用于整个扫描结果。
+- 分析逐文件执行并显示进度，每完成一首立即更新文件树。可「停止后续分析」：当前文件完成后停止，保留已完成结果；未处理的文件恢复原状态。失败不阻断后续文件，重新点击分析可重试。
+- 灰色：未分析；绿色：本次未检测出明显伪无损特征；黄至红：检测出可疑特征，评分越高底色越深、越偏红。蓝色区分等待／分析中及证据不足，紫色表示分析失败。每行也显示文字状态，点击「详情」查看判断依据。
+- 文件夹显示已分析数量、可疑数量、最高评分和失败数量；颜色取已完成子文件的最高评分，不代表文件夹内所有文件都已分析或都可疑。切换目录树／列表、搜索和清空勾选不会丢失结果；**重新扫描、刷新页面会清除结果**，本次没有引入持久化结果库。
+- 选择少量文件点击「生成对比」，图表结果也会更新对应文件的筛查状态。超出下述数量限制时仅禁用对比按钮，仍可分析全部勾选文件。
 - **2D 对比**：1–4 首频谱叠加，时频图分面排列；时频图缩放会同步坐标轴。
 - **3D 斜向堆叠**：1–8 首曲目分层显示；频谱为三维曲线，时频图为带颜色的平行平面，高度表示曲目编号。拖动旋转、滚轮缩放，可调整层间距、不透明度和重置视角。
 - 可统一频率上限、动态范围，或按相对进度对齐不同时长的歌曲；两种图均可导出 PNG。
@@ -40,19 +52,22 @@ Web 绘图覆盖整首音频，以最多 8192 点 Hann 窗和 50% 重叠进行�
 
 时频图为显示而聚合到最多 513 个频率格 × 320 个时间格，每格保留最大能量；3D 再聚合至最多 129 × 128 格。聚合可保留弱小窄带中的峰值，但不是完整原始 STFT，悬停读数为显示格数据。坐标保持各曲目的实际采样率和时长；超出曲目范围不补齐数据。更多说明见页面底部「读图说明与分析口径」。
 
-Web 摘要复用核心的能量边界和截止检测；Notebook / CLI 的完整鉴定和位深检查保持独立，原有使用方式不变。后端按文件大小和修改时间缓存最近 12 首结果；点击重新生成时会检查缓存是否仍有效。扫描新文件夹会清空缓存。
+Web 摘要复用核心的能量边界和截止检测；Notebook / CLI 的完整鉴定和位深检查保持独立，原有使用方式不变。Web 的位深筛查遍历全部声道的非零样本，以整数 PCM 的准确归一化比例检查 16-bit 网格，避免静音样本被误当成补零证据。后端按文件大小和修改时间缓存最近 12 首绘图数据，另保留当前扫描内的轻量分析摘要；重新分析／生成对比时检查缓存，文件在分析中发生变化则提示重试。每次扫描清空缓存。
+
+**评分口径（不是确定率或真伪概率）：** 使用可解释的 0–100 特征评分，35 分为可疑阈值，当前最高输出 95 分。显著低于 Nyquist 的高频截止按检测强度记 40–75 分，靠近 Nyquist 的截止最多 20 分；24/32-bit 文件中超过 99.5% 的非零样本落在 16-bit 网格上记约 95 分（至少 4096 个非零样本）；高采样率但 99% 能量低于 23 kHz 记 25 分。多种特征同时存在时，在最高单项分上每多一项加 10，封顶 95。音频不足 0.25 秒、静音或未知编码不给分；已知有损格式标记为不适用。母带低通、录音带宽与制作处理也能触发这些特征；绿色同样不能证明来源真实。
 
 解码优先使用 SoundFile；M4A/AAC/WMA/APE 等需要 FFmpeg 回退。安装 FFmpeg 后使 `ffmpeg` 和 `ffprobe` 在 PATH 中可用，或在启动前将 `FLAC_FORENSICS_FFMPEG` 设置为 `ffmpeg.exe` 的完整路径（同目录放置 `ffprobe.exe`）。页面会显示 FFmpeg 是否可用；具体编码能否读取仍取决于解码器构建和文件是否完整，不支持加密音频。
 
 FFmpeg 回退读取第一条音轨，保留采样率和声道数，暂存为浮点 PCM 后执行相同的全曲分析，结束或失败后自动清理临时文件；需要足够临时磁盘空间（约 `时长秒 × 采样率 × 声道数 × 8` 字节）。摘要显示源编码和已知的源位深，有损格式不把解码 PCM 的位深标为源文件位深。有损文件也可用于频谱对比，但不能因此推断为无损来源。此格式扩展适用于 Web UI，原 CLI / Notebook 的 FLAC 批量扫描不变。
 
-Web 文件：`web_app.py`（本地 API）、`web_analysis.py`（绘图数据）、`web/`（无构建步骤的前端）。
+Web 文件：`web_app.py`（本地 API）、`web_analysis.py`（流式分析与绘图数据）、`web_forensics.py`（评分规则）、`web/`（无构建步骤的前端）。
 
 验证：
 
 ```powershell
 & C:\Users\UCUNI\anaconda3\envs\flac-forensics\python.exe -m pip install -r requirements-dev.txt
 & C:\Users\UCUNI\anaconda3\envs\flac-forensics\python.exe -m unittest discover -s tests -v
+node --test tests/test_library_model.js
 ```
 
 ## Notebook 用法

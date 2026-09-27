@@ -4,6 +4,11 @@ const $ = (id) => document.getElementById(id);
 const palette = ["#b8f078", "#68c8f2", "#d7a0ec", "#ffbd7a", "#ff849b", "#65dfcc", "#d7d99c", "#a4afff"];
 const colorscale = [[0, "#121725"], [.22, "#20334f"], [.45, "#286686"], [.65, "#37a6a2"], [.84, "#a8dd75"], [1, "#ffe59a"]];
 const state = {tracks: [], selected: new Set(), data: new Map(), errors: new Map(), displayed: [], mode: "2d", busy: false, cameraRevision: 0};
+state.reports = new Map();
+state.pending = new Set();
+state.activeId = null;
+state.stopRequested = false;
+state.analyzing = false;
 state.libraryView = "tree";
 state.expandedFolders = new Set();
 let folderBadges = [];
@@ -57,49 +62,83 @@ function setBusy(value) {
 }
 function updateSelection() {
   const max = state.mode === "2d" ? 4 : 8;
-  $("selection-count").textContent = `已选 ${state.selected.size} / ${max}`;
-  $("selection-help").textContent = `${state.mode.toUpperCase()} 模式可选择 1–${max} 首曲目`;
-  $("compare").disabled = state.busy || !state.selected.size;
-  $("compare").textContent = state.busy ? "正在分析…" : `生成对比${state.selected.size ? ` · ${state.selected.size} 首` : ""} ↗`;
-  for (const {badge, ids} of folderBadges) {
-    const count = ids.filter((id) => state.selected.has(id)).length;
-    badge.textContent = count ? `${count}/${ids.length}` : String(ids.length);
-    badge.classList.toggle("has-selection", count > 0);
-    badge.title = `已选 ${count} / ${ids.length} 首`;
+  $("selection-count").textContent = `已选 ${state.selected.size} 首`;
+  $("selection-help").textContent = `批量分析不限数量 · ${state.mode.toUpperCase()} 对比最多 ${max} 首`;
+  $("compare").disabled = state.busy || !state.selected.size || state.selected.size > max;
+  $("compare").textContent = `生成对比${state.selected.size ? ` · ${state.selected.size} 首` : ""} ↗`;
+  $("analyze-selected").disabled = state.busy || !state.selected.size;
+  $("analyze-selected").textContent = `分析所选${state.selected.size ? ` · ${state.selected.size} 首` : ""}`;
+  $("stop-analysis").hidden = !state.analyzing;
+  $("stop-analysis").disabled = state.stopRequested;
+  $("stop-analysis").textContent = state.stopRequested ? "完成当前文件后停止…" : "停止后续分析";
+  const all = selectionSummary(state.tracks.map((t) => t.id), state.selected);
+  $("select-all").checked = all.checked;
+  $("select-all").indeterminate = all.indeterminate;
+  $("select-all").disabled = state.busy || !state.tracks.length;
+  for (const {badge, ids, checkbox} of folderBadges) {
+    const selected = selectionSummary(ids, state.selected);
+    badge.textContent = `${selected.count}/${ids.length}`;
+    badge.classList.toggle("has-selection", selected.count > 0);
+    badge.title = `已选 ${selected.count} / ${ids.length} 首（含子文件夹）`;
+    checkbox.checked = selected.checked;
+    checkbox.indeterminate = selected.indeterminate;
+    checkbox.disabled = state.busy;
   }
 }
+function paintResult(node, result) {
+  node.dataset.analysisStatus = result.status;
+  if (result.score !== null && result.score !== undefined) {
+    const score = Math.max(0, Math.min(100, result.score));
+    const hue = score < 35 ? 145 - score : 55 * (100 - score) / 65;
+    node.style.setProperty("--result-color", `hsl(${hue} 78% 72%)`);
+    node.style.setProperty("--result-bg", `hsl(${hue} 70% 45% / ${.07 + score / 100 * .23})`);
+  }
+}
+function reportFor(id) {
+  if (state.activeId === id) return {status: "running", score: null};
+  if (state.pending.has(id)) return {status: "queued", score: null};
+  if (state.errors.has(id)) return {status: "error", score: null};
+  return state.reports.get(id) || {status: "unanalysed", score: null};
+}
+function showReport(track) {
+  const report = state.reports.get(track.id);
+  $("report-title").textContent = track.name;
+  $("report-path").textContent = track.relative_path;
+  $("report-verdict").textContent = resultLabel(reportFor(track.id));
+  $("report-reasons").replaceChildren();
+  const reasons = state.errors.has(track.id) ? [state.errors.get(track.id)] : (report?.reasons || ["勾选此文件，点击「分析所选」。"]);
+  for (const reason of reasons) $("report-reasons").append(element("li", "", reason));
+  $("report-dialog").showModal();
+}
 function trackRow(track, compact = false) {
-    const row = element("label", compact ? "track-row compact-track" : "track-row");
-    row.title = track.relative_path;
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.checked = state.selected.has(track.id);
-    checkbox.disabled = state.busy;
-    checkbox.setAttribute("aria-label", track.relative_path);
-    checkbox.addEventListener("change", () => {
-      const max = state.mode === "2d" ? 4 : 8;
-      if (checkbox.checked && state.selected.size >= max) {
-        checkbox.checked = false;
-        message(`${state.mode.toUpperCase()} 最多对比 ${max} 首曲目。${state.mode === "2d" ? "可切换到 3D 对比更多曲目。" : "请先取消其他曲目。"}`, "error");
-        return;
-      }
-      if (checkbox.checked) state.selected.add(track.id);
-      else state.selected.delete(track.id);
-      updateSelection();
-      message("选择已更改，点击「生成对比」更新图表。");
-    });
-    const copy = element("span", "track-copy");
-    const name = element("span", "track-name", compact ? track.name : shortName(track.name, 100));
-    name.title = track.relative_path;
-    const parts = track.relative_path.split(/[\\/]/);
-    const folder = parts.length > 1 ? parts.slice(0, -1).join(" / ") : "根目录";
-    const meta = element("span", "track-meta", `${track.name.split(".").pop().toUpperCase()} · ${(track.size_bytes / 1048576).toFixed(1)} MB · ${folder}`);
-    meta.title = folder;
-    copy.append(name);
-    if (!compact) copy.append(meta);
-    if (state.errors.has(track.id)) copy.append(element("span", "track-error", state.errors.get(track.id)));
-    row.append(checkbox, copy);
-    return row;
+  const row = element("div", compact ? "track-row compact-track" : "track-row");
+  row.dataset.trackId = track.id;
+  row.title = track.relative_path;
+  const label = element("label", "track-selection");
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.checked = state.selected.has(track.id);
+  checkbox.disabled = state.busy;
+  checkbox.setAttribute("aria-label", track.relative_path);
+  checkbox.addEventListener("change", () => {
+    if (checkbox.checked) state.selected.add(track.id);
+    else state.selected.delete(track.id);
+    updateSelection();
+  });
+  const copy = element("span", "track-copy");
+  const name = element("span", "track-name", compact ? track.name : shortName(track.name, 100));
+  copy.append(name);
+  if (!compact) copy.append(element("span", "track-meta", `${track.name.split(".").pop().toUpperCase()} · ${(track.size_bytes / 1048576).toFixed(1)} MB`));
+  const result = reportFor(track.id);
+  paintResult(row, result);
+  copy.append(element("span", "analysis-badge", resultLabel(result)));
+  label.append(checkbox, copy);
+  const details = element("button", "evidence-button", "详情");
+  details.type = "button";
+  details.setAttribute("aria-label", `分析详情：${track.relative_path}`);
+  details.addEventListener("click", () => showReport(track));
+  row.append(label, details);
+  return row;
 }
 function makeTree(tracks) {
   const root = {folders: new Map(), tracks: [], ids: [], key: ""};
@@ -119,6 +158,9 @@ function makeTree(tracks) {
 function renderLibrary() {
   const query = $("search").value.trim().toLocaleLowerCase();
   const tracks = state.tracks.filter((t) => t.relative_path.toLocaleLowerCase().includes(query));
+  const allFolders = new Map();
+  function collect(node) { allFolders.set(node.key, node); for (const child of node.folders.values()) collect(child); }
+  collect(makeTree(state.tracks));
   const list = $("track-list");
   const scrollTop = list.scrollTop;
   const tree = state.libraryView === "tree";
@@ -141,8 +183,24 @@ function renderLibrary() {
         const summary = element("summary", "folder-summary");
         summary.title = child.key.slice(1);
         const badge = element("span", "folder-count");
-        summary.append(element("span", "folder-name", child.name), badge);
-        folderBadges.push({badge, ids: child.ids});
+        const ids = allFolders.get(child.key).ids;
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.setAttribute("aria-label", `选择文件夹 ${child.key.slice(1)}（含全部子文件）`);
+        checkbox.addEventListener("click", (event) => event.stopPropagation());
+        checkbox.addEventListener("keydown", (event) => event.stopPropagation());
+        checkbox.addEventListener("change", () => {
+          toggleSelection(ids, state.selected, checkbox.checked);
+          renderLibrary();
+        });
+        const copy = element("span", "folder-copy");
+        copy.append(element("span", "folder-name", child.name));
+        const aggregate = summarizeResults(ids.map(reportFor));
+        paintResult(summary, aggregate);
+        copy.append(element("span", "analysis-badge", aggregate.label));
+        summary.title = `${child.key.slice(1)} · 勾选包含全部子文件（含搜索隐藏项）；颜色取已完成文件中的最高评分`;
+        summary.append(checkbox, copy, badge);
+        folderBadges.push({badge, ids, checkbox});
         details.append(summary);
         const children = element("div", "tree-children");
         appendNode(child, children);
@@ -167,43 +225,78 @@ function setLibraryView(view) {
   try { localStorage.setItem("flac-library-view", view); } catch { /* Optional preference only. */ }
   renderLibrary();
 }
-function expandSelectedParents() {
-  for (const track of state.tracks.filter((t) => state.selected.has(t.id))) {
-    const parts = track.relative_path.split(/[\\/]/).slice(0, -1);
-    let key = "";
-    for (const part of parts) { key += `/${part}`; state.expandedFolders.add(key); }
-  }
-}
-async function scan(autoCompare = false) {
+async function scan() {
   if (state.busy) return;
   setBusy(true);
   message("正在扫描音频文件夹…", "busy");
-  let success = false;
   try {
     const result = await api("/api/scan", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({folder: $("folder").value.trim()})});
     state.tracks = result.tracks;
-    state.selected = new Set(result.tracks.slice(0, 2).map((t) => t.id));
+    state.selected = new Set();
     state.expandedFolders.clear();
-    expandSelectedParents();
     state.data.clear();
     state.errors.clear();
+    state.reports.clear();
+    $("analysis-progress").hidden = true;
     state.displayed = [];
     $("folder").value = result.folder;
     $("search").value = "";
     $("track-count").textContent = result.tracks.length;
     await scheduleRender();
-    message(result.tracks.length ? `找到 ${result.tracks.length} 首曲目，已预选前 ${Math.min(2, result.tracks.length)} 首。可调整勾选后生成对比。` : "没有找到支持的音频文件，请更换文件夹。支持的扩展名可悬停文件夹下方说明查看。");
-    success = true;
+    message(result.tracks.length ? `找到 ${result.tracks.length} 首曲目。勾选文件或文件夹，点击「分析所选」。` : "没有找到支持的音频文件，请更换文件夹。");
   } catch (error) {
     message(error.message, "error");
   } finally {
     setBusy(false);
   }
-  if (success && autoCompare && state.selected.size) await compare();
+}
+async function analyzeSelected() {
+  if (state.busy || !state.selected.size) return;
+  const tracks = state.tracks.filter((t) => state.selected.has(t.id));
+  state.pending = new Set(tracks.map((t) => t.id));
+  state.stopRequested = false;
+  state.analyzing = true;
+  setBusy(true);
+  $("analysis-progress").hidden = false;
+  $("analysis-meter").max = tracks.length;
+  $("analysis-meter").value = 0;
+  let completed = 0, failed = 0;
+  try {
+    for (const track of tracks) {
+      if (state.stopRequested) break;
+      state.activeId = track.id;
+      $("analysis-progress-text").textContent = `${completed} / ${tracks.length} · 正在分析 ${track.name}`;
+      message(`正在分析 ${completed + 1} / ${tracks.length}：${track.name}`, "busy");
+      renderLibrary();
+      try {
+        const data = await api(`/api/tracks/${track.id}/analysis`);
+        state.reports.set(track.id, data.forensics);
+        state.errors.delete(track.id);
+      } catch (error) {
+        failed++;
+        state.reports.delete(track.id);
+        state.errors.set(track.id, error.message);
+      }
+      state.pending.delete(track.id);
+      state.activeId = null;
+      completed++;
+      $("analysis-meter").value = completed;
+      renderLibrary();
+    }
+  } finally {
+    state.pending.clear();
+    state.activeId = null;
+    state.analyzing = false;
+    setBusy(false);
+    const text = `${completed < tracks.length ? "已停止" : "分析完成"} · 已处理 ${completed} / ${tracks.length} · 失败 ${failed}`;
+    $("analysis-progress-text").textContent = text;
+    message(`${text}。结果已标在文件树上，点击「详情」查看依据。`, failed ? "error" : "");
+  }
 }
 async function compare() {
   if (state.busy || !state.selected.size) return;
   const ids = [...state.selected];
+  if (ids.length > (state.mode === "2d" ? 4 : 8)) return;
   setBusy(true);
   const results = [];
   try {
@@ -216,10 +309,12 @@ async function compare() {
         // comparison so replacing a file cannot silently reuse stale plots.
         const data = await api(`/api/tracks/${id}`);
         state.data.set(id, data);
+        state.reports.set(id, data.forensics);
         state.errors.delete(id);
         results.push(data);
       } catch (error) {
         state.errors.set(id, error.message);
+        state.reports.delete(id);
         state.data.delete(id);
       }
     }
@@ -239,10 +334,6 @@ async function compare() {
 }
 function setMode(mode) {
   if (state.busy || state.mode === mode) return;
-  if (mode === "2d" && state.selected.size > 4) {
-    message("2D 最多支持 4 首曲目。请先取消多余勾选，再切换并生成对比。", "error");
-    return;
-  }
   if (mode === "2d" && state.displayed.length > 4) {
     message("请先点击「生成对比」更新为当前勾选的最多 4 首，再切换 2D。", "error");
     return;
@@ -453,6 +544,13 @@ $("clear-selection").addEventListener("click", () => {
   updateSelection();
   message("已清空选择，当前图表仍显示上一次对比结果。勾选曲目后可重新生成。");
 });
+$("select-all").addEventListener("change", () => {
+  toggleSelection(state.tracks.map((t) => t.id), state.selected, $("select-all").checked);
+  renderLibrary();
+});
+$("analyze-selected").addEventListener("click", analyzeSelected);
+$("stop-analysis").addEventListener("click", () => { state.stopRequested = true; updateSelection(); });
+$("close-report").addEventListener("click", () => $("report-dialog").close());
 $("compare").addEventListener("click", compare);
 $("mode-2d").addEventListener("click", () => setMode("2d"));
 $("mode-3d").addEventListener("click", () => setMode("3d"));
@@ -472,6 +570,6 @@ window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer
     $("folder").value = config.default_folder;
     $("format-help").title = config.supported_extensions.join(" / ");
     $("format-help").textContent = config.ffmpeg_available ? "包含子文件夹 · 常见无损 / 有损音频" : "包含子文件夹 · M4A / AAC 等格式需安装 FFmpeg";
-    await scan(true);
+    await scan();
   } catch (error) { message(error.message, "error"); }
 })();
