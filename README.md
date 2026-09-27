@@ -1,40 +1,62 @@
-# FLAC Forensics Tool
+# LosslessLens
 
-一个用于筛查 FLAC / PCM 是否存在“有损转无损”或“升采样”迹象的小工具。
+**简体中文** | [English](README.en.md)
 
-## about AIe
+本地音频筛查与频谱对比工具，用于发现 FLAC / PCM 中可能存在的有损转码、升采样和位深补零迹象。提供 Web UI、Notebook 和命令行三种入口。
 
-Most of this project was written by Codex GPT-6 in about 30 minutes.
+> 分析结果是启发式特征提示，不是音源真伪的证明。高频截止可能来自录音带宽、母带滤波或制作处理；未检出异常也不能证明来源真实。
 
-I gave it the general requirements and did a quick sanity check on the core logic, but most of the code has not been reviewed in detail.
+## AI使用声明
+本项目大部分代码由 Codex GPT-6 在约 30 分钟内编写。
+作者只提供了总体需求，简单查看了核心逻辑，大部分代码并没有进行详细审查。
+工具目前满足俺自己的使用需求，所以**如果计划将其用于重要判断，请考虑上述审查范围以及分析方法本身的限制。**
 
-It seems to work for what I needed it for, but keep the above in mind if you're planning to rely on it for anything important.
+## 功能概览
 
-## 文件
+| 入口 | 适用场景 | 输出 |
+| --- | --- | --- |
+| Web UI | 递归扫描曲库、勾选批量筛查、多格式音频对比 | 文件状态、评分依据、2D / 3D 图表、PNG |
+| Notebook | 交互式查看 FLAC 批量分析报告 | 逐文件报告、CSV 汇总 |
+| CLI | 批量分析 FLAC 文件夹或分析单个 FLAC / WAV 文件 | CSV，或单文件 JSON、频谱图、时频图 |
 
-- `flac_forensics.ipynb`：文件夹批量分析的交互入口
-- `flac_forensics.py`：核心分析逻辑
-- `requirements.txt`：Python 依赖
-- `environment.yml`：Anaconda 环境配置
+- Web 音频处理在本机完成，服务仅监听 `127.0.0.1`，不修改源音频。
+- 图表使用本地 Plotly，无需运行时访问 CDN。
+- Web 界面及部分分析报告目前以中文为主；英文 README 不代表界面已提供英文切换。
 
-## 安装
+## 导航
 
-```bash
-pip install -r requirements.txt
-```
+[快速开始](#快速开始) · [Web UI](#web-ui) · [Notebook 用法](#notebook-用法) · [CLI 用法](#cli-用法) · [检测内容](#检测内容) · [重要限制](#重要限制) · [开发与验证](#开发与验证) · [关于 AI](#关于-ai)
 
-如果 `soundfile` 安装后仍无法读取 FLAC，请确保系统有 `libsndfile`。
+## 快速开始
 
-## Web UI：勾选分析与频谱对比
+### 1. 创建环境
 
-在 `flac-forensics` 环境安装 Web 依赖并启动（PowerShell）：
+以下示例使用 Windows PowerShell 和 Anaconda，请从项目根目录执行。`$Conda` 按常见的用户目录安装位置设置；若安装在其他位置，请改成实际 `conda.exe` 路径。后续命令沿用此变量，无需激活环境。
 
 ```powershell
-& C:\Users\UCUNI\anaconda3\envs\flac-forensics\python.exe -m pip install -r requirements-web.txt
-& C:\Users\UCUNI\anaconda3\envs\flac-forensics\python.exe web_app.py --folder "D:\Music"
+$Conda = Join-Path $env:USERPROFILE "anaconda3\Scripts\conda.exe"
+& $Conda env create -f environment.yml
 ```
 
-打开 http://127.0.0.1:8765 。不传 `--folder` 时默认扫描本项目目录；端口可通过 `--port 8766` 更改。其他机器上使用项目环境内的 Python 运行同样的脚本即可。
+环境名为 `flac-forensics`，配置使用 Python 3.12。如果环境已存在，可用 `& $Conda env update -n flac-forensics -f environment.yml` 更新依赖。
+
+### 2. 启动 Web UI
+
+```powershell
+& $Conda run -n flac-forensics python -m pip install -r requirements-web.txt
+& $Conda run --no-capture-output -n flac-forensics python web_app.py --folder "D:\Music"
+```
+
+浏览器打开 [http://127.0.0.1:8765](http://127.0.0.1:8765)。首次进入只扫描目录，勾选文件后点击「分析所选」或「生成对比」。在终端按 `Ctrl+C` 停止服务。
+
+- 省略 `--folder` 时扫描项目目录；使用 `--port 8766` 更改端口。
+- 仅使用 Notebook / CLI 时，基础环境已包含核心依赖，无需安装 Web 依赖。
+- 使用其他 Python 环境时，通过该环境的解释器运行 `-m pip install -r requirements.txt`（核心）或 `requirements-web.txt`（Web），再运行相应脚本。若 SoundFile 无法读取 FLAC，请检查系统的 `libsndfile`。
+- Linux / macOS 可使用自己的 Conda 路径执行相同的 `conda run` 命令，并替换音频目录。
+
+## Web UI
+
+### 曲库、批量筛查与对比
 
 - 输入本机可访问的音频文件夹（也支持 UNC 路径），递归扫描 FLAC、WAV/WAVE、AIFF/AIFC、MP3/MP2、M4A/M4B、AAC、OGG/OGA、Opus、WMA、APE、WavPack（WV）和 CAF。首次打开只扫描目录，不自动分析文件。
 - 曲库默认采用紧凑目录树，文件夹可展开／折叠，数字显示曲目数及已选数量。提供「目录树／列表」切换和全部展开／折叠；切换保留勾选，显示偏好保存在当前浏览器。搜索自动展开匹配的目录，清除搜索后恢复原来的展开状态。
@@ -48,31 +70,33 @@ pip install -r requirements.txt
 - 可统一频率上限、动态范围，或按相对进度对齐不同时长的歌曲；两种图均可导出 PNG。
 - 图表库由本机 Python 的 Plotly 包提供，运行时无需 CDN 或互联网。服务只监听 `127.0.0.1`，音频不上传云端、不修改源文件。
 
+### 绘图与分析口径
+
 Web 绘图覆盖整首音频，以最多 8192 点 Hann 窗和 50% 重叠进行流式 FFT，按声道平均功率，避免反相声道抵消。频谱使用全曲平均功率并归一化到峰值 0 dB；时频图单独按全曲时频峰值归一化。适合比较频率分布，**不能比较绝对响度**。静音以 −120 dB 显示。
 
 时频图为显示而聚合到最多 513 个频率格 × 320 个时间格，每格保留最大能量；3D 再聚合至最多 129 × 128 格。聚合可保留弱小窄带中的峰值，但不是完整原始 STFT，悬停读数为显示格数据。坐标保持各曲目的实际采样率和时长；超出曲目范围不补齐数据。更多说明见页面底部「读图说明与分析口径」。
 
 Web 摘要复用核心的能量边界和截止检测；Notebook / CLI 的完整鉴定和位深检查保持独立，原有使用方式不变。Web 的位深筛查遍历全部声道的非零样本，以整数 PCM 的准确归一化比例检查 16-bit 网格，避免静音样本被误当成补零证据。后端按文件大小和修改时间缓存最近 12 首绘图数据，另保留当前扫描内的轻量分析摘要；重新分析／生成对比时检查缓存，文件在分析中发生变化则提示重试。每次扫描清空缓存。
 
+### 如何理解评分
+
 **评分口径（不是确定率或真伪概率）：** 使用可解释的 0–100 特征评分，35 分为可疑阈值，当前最高输出 95 分。显著低于 Nyquist 的高频截止按检测强度记 40–75 分，靠近 Nyquist 的截止最多 20 分；24/32-bit 文件中超过 99.5% 的非零样本落在 16-bit 网格上记约 95 分（至少 4096 个非零样本）；高采样率但 99% 能量低于 23 kHz 记 25 分。多种特征同时存在时，在最高单项分上每多一项加 10，封顶 95。音频不足 0.25 秒、静音或未知编码不给分；已知有损格式标记为不适用。母带低通、录音带宽与制作处理也能触发这些特征；绿色同样不能证明来源真实。
+
+### 格式支持与 FFmpeg
 
 解码优先使用 SoundFile；M4A/AAC/WMA/APE 等需要 FFmpeg 回退。安装 FFmpeg 后使 `ffmpeg` 和 `ffprobe` 在 PATH 中可用，或在启动前将 `FLAC_FORENSICS_FFMPEG` 设置为 `ffmpeg.exe` 的完整路径（同目录放置 `ffprobe.exe`）。页面会显示 FFmpeg 是否可用；具体编码能否读取仍取决于解码器构建和文件是否完整，不支持加密音频。
 
 FFmpeg 回退读取第一条音轨，保留采样率和声道数，暂存为浮点 PCM 后执行相同的全曲分析，结束或失败后自动清理临时文件；需要足够临时磁盘空间（约 `时长秒 × 采样率 × 声道数 × 8` 字节）。摘要显示源编码和已知的源位深，有损格式不把解码 PCM 的位深标为源文件位深。有损文件也可用于频谱对比，但不能因此推断为无损来源。此格式扩展适用于 Web UI，原 CLI / Notebook 的 FLAC 批量扫描不变。
 
-Web 文件：`web_app.py`（本地 API）、`web_analysis.py`（流式分析与绘图数据）、`web_forensics.py`（评分规则）、`web/`（无构建步骤的前端）。
-
-验证：
-
-```powershell
-& C:\Users\UCUNI\anaconda3\envs\flac-forensics\python.exe -m pip install -r requirements-dev.txt
-& C:\Users\UCUNI\anaconda3\envs\flac-forensics\python.exe -m unittest discover -s tests -v
-node --test tests/test_library_model.js
-```
-
 ## Notebook 用法
 
-打开 `flac_forensics.ipynb`，选择 `Python (flac-forensics)` 内核，将：
+先在现有 Jupyter 或编辑器中注册项目内核（`environment.yml` 包含 `ipykernel`，不包含 Jupyter 界面）：
+
+```powershell
+& $Conda run -n flac-forensics python -m ipykernel install --user --name flac-forensics --display-name "Python (flac-forensics)"
+```
+
+在 Jupyter Notebook / JupyterLab 或支持 Notebook 的编辑器中打开 [flac_forensics.ipynb](flac_forensics.ipynb)，选择 `Python (flac-forensics)` 内核，将：
 
 ```python
 FOLDER = Path(r"D:\music\album")
@@ -83,27 +107,26 @@ CSV_PATH = FOLDER / "flac_analysis.csv"
 
 ## CLI 用法
 
-批量分析文件夹：
+以下命令沿用快速开始中设置的 `$Conda`。
 
-```bash
-python flac_forensics.py "D:\music\album" --csv "D:\music\album\flac_analysis.csv"
+批量分析文件夹及其子目录中的 FLAC：
+
+```powershell
+& $Conda run -n flac-forensics python flac_forensics.py "D:\Music\album" --csv "D:\Music\album\flac_analysis.csv"
 ```
 
-不指定 `--csv` 时，默认写入指定文件夹下的 `flac_analysis.csv`。如果有文件分析失败，CLI 会继续处理其他文件，最后返回非零退出码。
+不指定 `--csv` 时，默认写入目标文件夹下的 `flac_analysis.csv`。分析失败的文件也写入 CSV，`status` 为 `error`，原因写入 `error` 列。CLI 会继续处理其他文件，最后返回非零退出码。
 
 单文件分析：
 
-```bash
-python flac_forensics.py "your_file.flac"
+```powershell
+& $Conda run -n flac-forensics python flac_forensics.py "your_file.flac"
 ```
 
-同时保存 JSON 和图：
+同时保存 JSON、频谱图和时频图：
 
-```bash
-python flac_forensics.py "your_file.flac" \
-  --json report.json \
-  --spectrum spectrum.png \
-  --spectrogram spectrogram.png
+```powershell
+& $Conda run -n flac-forensics python flac_forensics.py "your_file.flac" --json report.json --spectrum spectrum.png --spectrogram spectrogram.png
 ```
 
 ## 检测内容
@@ -132,3 +155,28 @@ python flac_forensics.py "your_file.flac" \
 - DSP / 重采样链路
 
 因此输出是**启发式判断**，适合筛查和横向比较，不应当当作来源链的绝对证明。
+
+## 项目结构
+
+| 路径 | 用途 |
+| --- | --- |
+| [flac_forensics.py](flac_forensics.py) | 核心分析逻辑与 CLI |
+| [flac_forensics.ipynb](flac_forensics.ipynb) | 交互式文件夹分析 |
+| [web_app.py](web_app.py) | 本地 Web API 与启动入口 |
+| [web_analysis.py](web_analysis.py) | 流式分析与绘图数据 |
+| [web_forensics.py](web_forensics.py) | Web 筛查评分规则 |
+| [audio_formats.py](audio_formats.py) | 格式识别与 FFmpeg 解码回退 |
+| [web/](web/) | 无构建步骤的前端 |
+| [tests/](tests/) | Python 与 JavaScript 测试 |
+| [environment.yml](environment.yml) | Conda 环境配置 |
+| `requirements*.txt` | 核心、Web 与开发依赖 |
+
+## 开发与验证
+
+沿用快速开始中的环境。JavaScript 测试另外需要可用的 Node.js：
+
+```powershell
+& $Conda run -n flac-forensics python -m pip install -r requirements-dev.txt
+& $Conda run -n flac-forensics python -m unittest discover -s tests -v
+node --test tests/test_library_model.js
+```
