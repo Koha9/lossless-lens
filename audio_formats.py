@@ -59,7 +59,7 @@ def _source_metadata(path, ffmpeg):
 
 
 @contextmanager
-def open_plot_audio(path):
+def open_plot_audio(path, *, temp_dir=None):
     path = Path(path).resolve(strict=True)
     try:
         audio = sf.SoundFile(path)
@@ -77,7 +77,7 @@ def open_plot_audio(path):
     metadata = _source_metadata(path, ffmpeg)
     # Use disk-backed float64 PCM without changing sample rate or channel count.
     # Cleanup also runs when analysis raises or decoding fails.
-    with tempfile.TemporaryDirectory(prefix="audio-plot-") as folder:
+    with tempfile.TemporaryDirectory(prefix="audio-plot-", dir=temp_dir or Path.cwd()) as folder:
         decoded = Path(folder) / "decoded.wav"
         _run([ffmpeg, "-nostdin", "-v", "error", "-xerror", "-i", str(path), "-map", "0:a:0",
               "-vn", "-c:a", "pcm_f64le", "-rf64", "auto", str(decoded)], 600)

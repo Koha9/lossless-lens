@@ -7,6 +7,7 @@
   <title>FLAC Lab · 频谱对比工作台</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='10' fill='%23101519'/%3E%3Cpath d='M8 20h4m3-8v16m5-22v28m5-24v20m5-13v6' stroke='%23b8f078' stroke-width='3'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/workspace.css">
   <script defer src="/vendor/plotly.min.js"></script>
   <script defer src="/static/library-model.js"></script>
   <script defer src="/static/app.js"></script>
@@ -18,7 +19,7 @@
   </header>
   <div class="workspace">
     <aside class="library" aria-label="音频曲库">
-      <div class="library-head"><div><p class="eyebrow">YOUR COLLECTION</p><h2>音频曲库 <span id="track-count">0</span></h2></div><span class="folder-icon" aria-hidden="true">▱</span></div>
+      <div class="library-head"><h2>音频曲库 <span id="track-count">0</span></h2></div>
       <form id="scan-form">
         <label class="field-label" for="folder">音频文件夹</label>
         <div class="folder-field"><input id="folder" required spellcheck="false" placeholder="D:\Music 或 UNC 路径"><button id="scan-button" type="submit">扫描</button></div>
@@ -33,7 +34,7 @@
       <div class="library-footer"><button id="analyze-selected" class="primary-button" disabled>分析所选</button><button id="stop-analysis" class="secondary-button" hidden>停止后续分析</button><button id="compare" class="secondary-button compare-button" disabled>生成对比 <span aria-hidden="true">↗</span></button><p id="selection-help">批量分析不限数量 · 2D 对比最多 4 首</p></div>
     </aside>
     <main>
-      <div class="page-heading"><div><p class="eyebrow accent">SPECTRAL WORKSPACE / 01</p><h1>听见细节，看见差异<span>.</span></h1><p class="subtitle">在同一尺度下，探索音频的频率与时间。</p></div><a class="guide-link" href="#methodology">如何阅读图表 <span aria-hidden="true">↗</span></a></div>
+      <div class="page-heading"><h1>频谱分析工作台</h1><a class="guide-link" href="#methodology">读图说明 <span aria-hidden="true">↗</span></a></div>
       <section class="toolbar" aria-label="对比设置">
         <div class="mode-switch" role="group" aria-label="显示模式"><button id="mode-2d" class="active" aria-pressed="true" type="button"><span aria-hidden="true">▦</span> 2D 对比</button><button id="mode-3d" aria-pressed="false" type="button"><span aria-hidden="true">◇</span> 3D 斜向堆叠</button></div>
         <div class="settings"><label>频率上限<select id="frequency-limit"><option value="0">完整频段</option><option value="24">24 kHz</option><option value="20">20 kHz</option><option value="16">16 kHz</option></select></label><label>动态范围<select id="db-range"><option value="120">120 dB</option><option value="100">100 dB</option><option value="80">80 dB</option><option value="60">60 dB</option></select></label><label>时间坐标<select id="time-mode"><option value="seconds">实际时长 / s</option><option value="relative">相对进度 / %</option></select></label></div>
@@ -42,7 +43,7 @@
       <div id="status" class="status" role="status" aria-live="polite">正在连接本地分析服务…</div>
       <div id="analysis-progress" class="analysis-progress" hidden><span id="analysis-progress-text" role="status" aria-live="polite"></span><progress id="analysis-meter" value="0" max="1" aria-label="批量分析进度"></progress></div>
       <div id="legend" class="track-legend" aria-label="当前图表曲目"></div>
-      <div id="empty-state" class="empty-state"><div class="empty-graphic" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div><p class="eyebrow">EVERY TRACK HAS A SIGNATURE</p><h2>从选择曲目开始</h2><p>勾选文件或整个文件夹，点击「分析所选」。<br>筛查结果直接显示在文件树上；少量曲目可生成频谱对比。</p></div>
+      <div id="empty-state" class="empty-state"><h2>选择曲目后开始分析</h2><p>左侧勾选文件或文件夹 → 分析所选；选择少量曲目 → 生成对比。<br>分析状态直接显示在目录树中，点击「详情」查看依据。</p></div>
       <div id="charts" hidden>
         <section class="chart-panel"><div class="panel-heading"><div class="panel-title"><span class="section-number">01</span><div><h2>频率响应 <span>Frequency spectrum</span></h2><p>Relative magnitude — Frequency · 全曲平均功率，峰值归一化</p></div></div><button id="export-spectrum" class="secondary-button" type="button">导出 PNG ↓</button></div><div id="spectrum-plot" class="spectrum-plot" aria-label="相对幅度与频率对比图"></div></section>
         <section class="chart-panel"><div class="panel-heading"><div class="panel-title"><span class="section-number">02</span><div><h2>时频分布 <span>Spectrogram</span></h2><p id="spectrogram-caption">Frequency — Time · 相同频率、时间范围与色阶</p></div></div><button id="export-spectrogram" class="secondary-button" type="button">导出 PNG ↓</button></div><div id="spectrogram-plot" class="spectrogram-plot" aria-label="频率与时间对比图"></div><div class="panel-footnote"><span class="scale-key"></span>颜色表示各曲目相对峰值的功率 dB，数值越接近 0，能量越强。</div></section>

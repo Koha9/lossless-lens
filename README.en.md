@@ -49,7 +49,7 @@ The environment is named `flac-forensics` and specifies Python 3.12. If it alrea
 
 Open [http://127.0.0.1:8765](http://127.0.0.1:8765). The initial scan only lists files. Select files and click **分析所选** (Analyze selected) or **生成对比** (Generate comparison). Press `Ctrl+C` in the terminal to stop the server.
 
-- Without `--folder`, the app scans the project directory. Use `--port 8766` to change the port.
+- Without `--folder`, the app scans the startup working directory. Use `--port 8766` to change the port.
 - For Notebook / CLI use only, the base environment already includes the core dependencies; Web dependencies are optional.
 - With another Python environment, use its interpreter to run `-m pip install -r requirements.txt` for core features or `requirements-web.txt` for the Web UI, then run the corresponding script. If SoundFile cannot read FLAC, check that `libsndfile` is available.
 - On Linux / macOS, use your own Conda executable with the same `conda run` arguments and replace the audio paths.
@@ -93,7 +93,34 @@ For display, spectrograms are aggregated to at most 513 frequency bins × 320 ti
 
 Web summaries reuse the core spectral-edge and cutoff detection. The full Notebook / CLI assessment and bit-depth checks remain separate. Web bit-depth screening examines nonzero samples across all channels using the exact integer-PCM normalization scale to test alignment to a 16-bit grid; silence is excluded from padding evidence.
 
-The backend caches plotting data for the latest 12 files using file size and modification time, and keeps lightweight summaries within the current scan. Analysis and comparison requests check the cache; a file changed during analysis requires a retry. Every scan clears the cache.
+### Session analysis cache
+
+The first analysis, including batch screening, saves the complete display-resolution spectrum, spectrogram, axes, audio metadata, analysis parameters, metrics and screening result as JSON. This is not raw PCM or the full STFT. Disk data survives rescans, page refreshes and eviction from the 12-track memory cache, so later comparisons avoid repeating decoding and FFT. Frontend status resets on refresh/rescan; subsequent requests reuse cached data.
+
+Files live exclusively in a randomly named `.lossless-lens-*` session subdirectory of the **startup working directory (cwd)**. `--folder` only selects the audio library. FFmpeg temporary WAV files also live in the session directory and are removed after each track. The startup directory must be writable; there is no fallback to system temp or AppData. Disk usage grows with the number of analyzed tracks.
+
+Cache validation uses path, file size and nanosecond modification time. Changed files replace their old cache; corrupt cache files are rebuilt. Changes during analysis require a retry. External modifications preserving both size and timestamp cannot be detected.
+
+Press **Ctrl+C** in the server terminal for graceful shutdown and removal of the entire session directory. Closing the browser does not stop the server. Forced termination, crashes or power loss may leave a directory; remove that `.lossless-lens-*` directory manually after stopping the server. Instances have separate directories and never clean each other's files. A new session starts without reusing old data.
+
+### Windows `--onedir` build
+
+Install Web dependencies as described above, then run from the project root in PowerShell:
+
+```powershell
+.\build_onedir.ps1
+# Or select the project's Python interpreter:
+.\build_onedir.ps1 -Python "C:\path\to\env\python.exe"
+```
+
+The script uses PyInstaller `--onedir --console`, bundling web assets, local Plotly resources and Python dependencies in `dist\LosslessLens\`. Build tools are installed locally under `build\packaging-tools`; tool caches and temporary build files remain under the project's `build\` directory. Distribute the **entire LosslessLens directory**, not just the executable. The destination machine does not need Python or Conda.
+
+```powershell
+Set-Location .\dist\LosslessLens
+.\LosslessLens.exe --folder "D:\Music" --port 8765
+```
+
+Open [http://127.0.0.1:8765](http://127.0.0.1:8765), and press Ctrl+C in the terminal to exit. In this example the session cache lives under `dist\LosslessLens\`. Without `--folder`, the startup working directory is scanned. FFmpeg/ffprobe are external dependencies and are not bundled; configure them below if required. This package provides the Web entry point, not Notebook/CLI plotting. See the [official PyInstaller options](https://pyinstaller.org/en/stable/usage.html).
 
 ### Interpreting scores
 

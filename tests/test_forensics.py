@@ -99,7 +99,7 @@ class ForensicsTests(unittest.TestCase):
             calls = build.call_count
             client.post("/api/scan", json={"folder": str(self.folder)})
             self.assertEqual(client.get(url).status_code, 200)
-            self.assertEqual(build.call_count, calls + 1)
+            self.assertEqual(build.call_count, calls)
             self.assertEqual(client.get("/api/tracks/missing/analysis").status_code, 404)
 
     def test_file_modified_during_analysis_is_not_cached(self):

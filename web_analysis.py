@@ -20,8 +20,8 @@ FREQUENCY_BINS = 513
 FLOOR_DB = -120
 
 
-def build_plot_data(path: Path, *, include_plots=True) -> dict:
-    with open_plot_audio(path) as (audio, source):
+def build_plot_data(path: Path, *, include_plots=True, temp_dir=None) -> dict:
+    with open_plot_audio(path, temp_dir=temp_dir) as (audio, source):
         if audio.frames < 32:
             raise ValueError("音频过短：至少需要 32 个采样点。")
         sr, frames, channels = audio.samplerate, audio.frames, audio.channels

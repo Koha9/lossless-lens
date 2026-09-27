@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 from collections import OrderedDict
+from contextlib import asynccontextmanager
 import hashlib
 from pathlib import Path
 import threading
@@ -18,6 +19,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from web_analysis import build_plot_data
 from audio_formats import SUPPORTED, find_ffmpeg
+from session_cache import SessionCache
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -27,7 +29,23 @@ class ScanRequest(BaseModel):
 
 
 def create_app(default_folder: Path = BASE_DIR) -> FastAPI:
-    app = FastAPI(title="FLAC / spectral workspace", docs_url=None, redoc_url=None)
+    work_dir = Path.cwd().resolve()
+
+    @asynccontextmanager
+    async def lifespan(app):
+        disk = SessionCache(work_dir)
+        app.state.session_cache = disk
+        try:
+            yield
+        finally:
+            # Uvicorn drains active requests before shutdown; also guard writers.
+            with analysis_lock:
+                disk.close()
+                cache.clear()
+                summaries.clear()
+
+    app = FastAPI(title="FLAC / spectral workspace", docs_url=None, redoc_url=None,
+                  lifespan=lifespan)
     app.add_middleware(GZipMiddleware, minimum_size=1000)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1", "[::1]", "testserver"])
     registry: dict[str, Path] = {}
@@ -57,7 +75,8 @@ def create_app(default_folder: Path = BASE_DIR) -> FastAPI:
             folder = folder.resolve(strict=True)
             if not folder.is_dir():
                 raise ValueError("请输入音频文件夹路径。")
-            files = sorted((p for p in folder.rglob("*") if p.is_file() and p.suffix.lower() in SUPPORTED),
+            files = sorted((p for p in folder.rglob("*") if p.is_file() and p.suffix.lower() in SUPPORTED
+                            and not any(part.startswith(".lossless-lens-") for part in p.parts)),
                            key=lambda p: str(p.relative_to(folder)).casefold())
             entries, found = [], {}
             for p in files:
@@ -81,17 +100,24 @@ def create_app(default_folder: Path = BASE_DIR) -> FastAPI:
         if path is None:
             raise HTTPException(404, "未找到曲目，请重新扫描文件夹。")
         try:
-            stat = path.stat()
-            key = (track_id, stat.st_size, stat.st_mtime_ns)
             # Serialize expensive decodes; prevent parallel requests multiplying memory use.
             with analysis_lock:
+                stat = path.stat()
+                key = (track_id, stat.st_size, stat.st_mtime_ns)
                 with lock:
                     if key in cache:
                         cache.move_to_end(key)
                         return cache[key] if include_plots else summaries[key]
                     if not include_plots and key in summaries:
                         return summaries[key]
-                result = {"id": track_id, **build_plot_data(path, include_plots=include_plots)}
+                disk = app.state.session_cache
+                result = disk.read(key)
+                if result is None:
+                    result = {"id": track_id, **build_plot_data(path, temp_dir=disk.directory)}
+                    after = path.stat()
+                    if (after.st_size, after.st_mtime_ns) != (stat.st_size, stat.st_mtime_ns):
+                        raise ValueError("文件在分析过程中发生变化，请重试。")
+                    disk.write(key, result)
                 after = path.stat()
                 if (after.st_size, after.st_mtime_ns) != (stat.st_size, stat.st_mtime_ns):
                     raise ValueError("文件在分析过程中发生变化，请重试。")
@@ -102,11 +128,11 @@ def create_app(default_folder: Path = BASE_DIR) -> FastAPI:
                                 del summaries[old_key]
                                 cache.pop(old_key, None)
                         summaries[key] = {k: v for k, v in result.items() if k not in {"spectrum", "spectrogram"}}
-                        if include_plots:
-                            cache[key] = result
-                            while len(cache) > 12:
-                                cache.popitem(last=False)
-                return result
+                        cache[key] = result
+                        while len(cache) > 12:
+                            cache.popitem(last=False)
+                return result if include_plots else {k: v for k, v in result.items()
+                                                    if k not in {"spectrum", "spectrogram"}}
         except (OSError, RuntimeError, ValueError) as exc:
             raise HTTPException(422, f"无法分析 {path.name}：{exc}") from exc
 
@@ -135,7 +161,7 @@ if __name__ == "__main__":
     import uvicorn
 
     parser = argparse.ArgumentParser(description="FLAC 本地频谱对比 Web UI")
-    parser.add_argument("--folder", type=Path, default=BASE_DIR, help="默认音频文件夹，递归扫描")
+    parser.add_argument("--folder", type=Path, default=Path.cwd(), help="默认音频文件夹，递归扫描")
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
     uvicorn.run(create_app(args.folder), host="127.0.0.1", port=args.port)

@@ -131,7 +131,13 @@ function trackRow(track, compact = false) {
   if (!compact) copy.append(element("span", "track-meta", `${track.name.split(".").pop().toUpperCase()} · ${(track.size_bytes / 1048576).toFixed(1)} MB`));
   const result = reportFor(track.id);
   paintResult(row, result);
-  copy.append(element("span", "analysis-badge", resultLabel(result)));
+  const compactLabels = {clear: "未见异常", suspicious: "可疑", lossy: "有损编码"};
+  const compactLabel = compactLabels[result.status];
+  const status = element("span", "analysis-badge", compact && compactLabel
+    ? `${compactLabel}${Number.isFinite(result.score) ? ` ${result.score}` : ""}`
+    : resultLabel(result));
+  status.title = resultLabel(result);
+  copy.append(status);
   label.append(checkbox, copy);
   const details = element("button", "evidence-button", "详情");
   details.type = "button";
@@ -197,7 +203,9 @@ function renderLibrary() {
         copy.append(element("span", "folder-name", child.name));
         const aggregate = summarizeResults(ids.map(reportFor));
         paintResult(summary, aggregate);
-        copy.append(element("span", "analysis-badge", aggregate.label));
+        const status = element("span", "analysis-badge", aggregate.label);
+        status.title = aggregate.label;
+        copy.append(status);
         summary.title = `${child.key.slice(1)} · 勾选包含全部子文件（含搜索隐藏项）；颜色取已完成文件中的最高评分`;
         summary.append(checkbox, copy, badge);
         folderBadges.push({badge, ids, checkbox});

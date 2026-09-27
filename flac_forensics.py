@@ -12,7 +12,6 @@ import subprocess
 import wave
 
 import numpy as np
-import matplotlib.pyplot as plt
 
 try:
     import soundfile as sf
@@ -487,6 +486,7 @@ def analyze_folder(
 
 
 def plot_spectrum(path: str | Path, out_path: str | Path | None = None, max_seconds: Optional[float] = None):
+    import matplotlib.pyplot as plt
     data, info = read_audio(path)
     x = _mono(data)
     if max_seconds is not None:
@@ -518,6 +518,7 @@ def plot_spectrum(path: str | Path, out_path: str | Path | None = None, max_seco
 
 
 def plot_spectrogram(path: str | Path, out_path: str | Path | None = None):
+    import matplotlib.pyplot as plt
     data, info = read_audio(path)
     x = _mono(data)
 
@@ -627,4 +628,5 @@ if __name__ == "__main__":
         plot_spectrogram(args.audio, args.spectrogram_path)
 
     if args.spectrum_path or args.spectrogram_path:
+        import matplotlib.pyplot as plt
         plt.show()
