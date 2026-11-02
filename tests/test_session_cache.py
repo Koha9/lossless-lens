@@ -10,7 +10,6 @@ import numpy as np
 import soundfile as sf
 
 from web_app import create_app
-from web_analysis import build_plot_data
 
 
 class SessionCacheTests(unittest.TestCase):
@@ -39,7 +38,7 @@ class SessionCacheTests(unittest.TestCase):
     def test_summary_saves_full_data_rescan_reuses_and_shutdown_cleans(self):
         self.write()
         app = self.app()
-        with TestClient(app) as client, patch("web_app.build_plot_data", wraps=build_plot_data) as build:
+        with TestClient(app) as client, patch.object(app.state.analysis_pool, "submit", wraps=app.state.analysis_pool.submit) as build:
             url = f"/api/tracks/{self.scan(client)[0]['id']}"
             summary = client.get(url + "/analysis").json()
             directory = app.state.session_cache.directory
@@ -59,7 +58,8 @@ class SessionCacheTests(unittest.TestCase):
     def test_lru_eviction_keeps_disk_data(self):
         for i in range(13):
             self.write(f"{i:02}.wav")
-        with TestClient(self.app()) as client, patch("web_app.build_plot_data", wraps=build_plot_data) as build:
+        app = self.app()
+        with TestClient(app) as client, patch.object(app.state.analysis_pool, "submit", wraps=app.state.analysis_pool.submit) as build:
             tracks = self.scan(client)
             for track in tracks:
                 self.assertEqual(client.get(f"/api/tracks/{track['id']}/analysis").status_code, 200)
@@ -69,7 +69,7 @@ class SessionCacheTests(unittest.TestCase):
     def test_corrupt_cache_and_changed_source_rebuild(self):
         path = self.write()
         app = self.app()
-        with TestClient(app) as client, patch("web_app.build_plot_data", wraps=build_plot_data) as build:
+        with TestClient(app) as client, patch.object(app.state.analysis_pool, "submit", wraps=app.state.analysis_pool.submit) as build:
             url = f"/api/tracks/{self.scan(client)[0]['id']}"
             original = client.get(url).json()
             cache_file = next(app.state.session_cache.directory.glob("*.json"))

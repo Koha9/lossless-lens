@@ -1,4 +1,5 @@
 from pathlib import Path
+from concurrent.futures import Future
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -78,7 +79,8 @@ class ForensicsTests(unittest.TestCase):
     def test_summary_api_cache_file_change_and_failure_isolation(self):
         path = self.write("valid.flac", self.noise())
         (self.folder / "broken.flac").write_text("bad")
-        with TestClient(create_app(self.folder)) as client, patch("web_app.build_plot_data", wraps=build_plot_data) as build:
+        app = create_app(self.folder)
+        with TestClient(app) as client, patch.object(app.state.analysis_pool, "submit", wraps=app.state.analysis_pool.submit) as build:
             entries = client.post("/api/scan", json={"folder": str(self.folder)}).json()["tracks"]
             ids = {t["name"]: t["id"] for t in entries}
             url = f"/api/tracks/{ids['valid.flac']}/analysis"
@@ -104,14 +106,17 @@ class ForensicsTests(unittest.TestCase):
 
     def test_file_modified_during_analysis_is_not_cached(self):
         path = self.write("changing.flac", self.noise())
-        def changed(path, **kwargs):
-            result = build_plot_data(path, **kwargs)
+        app = create_app(self.folder)
+        def changed(fn, path, **kwargs):
+            result = fn(path, **kwargs)
             self.write(path.name, np.zeros(96000))
-            return result
-        with TestClient(create_app(self.folder)) as client:
+            future = Future()
+            future.set_result(result)
+            return future
+        with TestClient(app) as client:
             track = client.post("/api/scan", json={"folder": str(self.folder)}).json()["tracks"][0]
             url = f"/api/tracks/{track['id']}/analysis"
-            with patch("web_app.build_plot_data", side_effect=changed):
+            with patch.object(app.state.analysis_pool, "submit", side_effect=changed):
                 self.assertEqual(client.get(url).status_code, 422)
             self.assertEqual(client.get(url).json()["forensics"]["status"], "inconclusive")
 

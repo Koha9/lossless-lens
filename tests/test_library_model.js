@@ -1,7 +1,18 @@
 "use strict";
 const {test} = require("node:test");
 const assert = require("node:assert/strict");
-const {selectionSummary, toggleSelection, resultLabel, summarizeResults} = require("../web/library-model.js");
+const {selectionSummary, toggleSelection, meetsSuspiciousThreshold, resultLabel, summarizeResults} = require("../web/library-model.js");
+
+test("suspicious selection uses an inclusive adjustable score threshold and completed evidence", () => {
+  assert.equal(meetsSuspiciousThreshold({status: "suspicious", score: 35}, 35), true);
+  assert.equal(meetsSuspiciousThreshold({status: "suspicious", score: 75}, 80), false);
+  assert.equal(meetsSuspiciousThreshold({status: "clear", score: 25}, 20), true);
+  assert.equal(meetsSuspiciousThreshold({status: "clear", score: 0}, 0), true);
+  for (const status of ["error", "queued", "running", "lossy", "inconclusive", "unanalysed"]) {
+    assert.equal(meetsSuspiciousThreshold({status, score: 95}, 35), false);
+    assert.equal(meetsSuspiciousThreshold({status, score: null}, 0), false);
+  }
+});
 test("folder selection supports all descendants, mixed state and more than 8 files", () => {
   const ids = Array.from({length: 20}, (_, i) => String(i));
   const selected = new Set(["outside"]);

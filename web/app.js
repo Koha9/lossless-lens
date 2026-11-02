@@ -1,12 +1,21 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
+const t = LensI18n.translate;
+const setText = LensI18n.text;
+LensI18n.init();
 const palette = ["#b8f078", "#68c8f2", "#d7a0ec", "#ffbd7a", "#ff849b", "#65dfcc", "#d7d99c", "#a4afff"];
 const colorscale = [[0, "#121725"], [.22, "#20334f"], [.45, "#286686"], [.65, "#37a6a2"], [.84, "#a8dd75"], [1, "#ffe59a"]];
 const state = {tracks: [], selected: new Set(), data: new Map(), errors: new Map(), displayed: [], mode: "2d", busy: false, cameraRevision: 0};
 state.reports = new Map();
 state.pending = new Set();
-state.activeId = null;
+state.activeIds = new Set();
+state.analysisWorkers = 1;
+state.settingsReady = false;
+state.settingsSaving = false;
+state.suspiciousThreshold = 35;
+state.transferRunning = false;
+state.transferDone = false;
 state.stopRequested = false;
 state.analyzing = false;
 state.libraryView = "tree";
@@ -16,15 +25,22 @@ try { if (localStorage.getItem("flac-library-view") === "list") state.libraryVie
 const plotConfig = {responsive: true, displaylogo: false, scrollZoom: true, modeBarButtonsToRemove: ["select2d", "lasso2d", "toImage"], doubleClick: "reset"};
 let renderPending = false;
 let renderPromise = null;
+let libraryRenderPending = false;
+
+function scheduleLibraryRender() {
+  if (libraryRenderPending) return;
+  libraryRenderPending = true;
+  requestAnimationFrame(() => { libraryRenderPending = false; renderLibrary(); });
+}
 
 function message(text, kind = "") {
-  $("status").textContent = text;
+  setText($("status"), text);
   $("status").className = `status ${kind}`;
 }
 function element(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
+  if (text !== undefined) setText(node, text);
   return node;
 }
 function escapePlotText(text) {
@@ -40,7 +56,7 @@ function duration(seconds) {
 }
 function audioDetails(info) {
   const codecs = {MPEG_LAYER_III: "MP3", MPEG_LAYER_II: "MP2", VORBIS: "Vorbis", OPUS: "Opus", WMAV1: "WMA", WMAV2: "WMA", WAVPACK: "WavPack"};
-  return `${info.sample_rate / 1000} kHz / ${info.bit_depth ? `${info.bit_depth} bit` : (codecs[info.subtype] || info.subtype)}`;
+  return `${info.sample_rate / 1000} kHz / ${info.bit_depth ? `${info.bit_depth} bit` : (codecs[info.subtype] || t(info.subtype))}`;
 }
 async function api(url, options) {
   const response = await fetch(url, options);
@@ -50,6 +66,54 @@ async function api(url, options) {
   }
   return response.json();
 }
+async function applyAnalysisWorkers(workers) {
+  const settings = await api("/api/settings", {method: "PUT", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({analysis_workers: workers})});
+  state.analysisWorkers = settings.analysis_workers;
+  $("analysis-workers").value = String(state.analysisWorkers);
+}
+function updateSettingsControls() {
+  const disabled = !state.settingsReady || state.busy || state.settingsSaving;
+  $("open-settings").disabled = !state.settingsReady || state.settingsSaving;
+  for (const id of ["analysis-workers", "suspicious-threshold", "restore-settings", "save-settings"]) $(id).disabled = disabled;
+  for (const id of ["close-settings", "cancel-settings"]) $(id).disabled = state.settingsSaving;
+  setText($("save-settings"), state.settingsSaving ? "正在保存…" : "保存设置");
+  setText($("settings-note"), state.settingsSaving ? "正在保存设置…" : state.busy
+    ? "当前任务进行中，完成后可调整进程数。"
+    : "保存后对后续分析生效。此偏好保存在当前浏览器。");
+}
+function openSettings() {
+  $("analysis-workers").value = String(state.analysisWorkers);
+  $("suspicious-threshold").value = String(state.suspiciousThreshold);
+  $("settings-error").hidden = true;
+  updateSettingsControls();
+  $("settings-dialog").showModal();
+}
+async function saveAnalysisWorkers() {
+  if (state.busy || state.settingsSaving) return;
+  const workers = Number($("analysis-workers").value);
+  const threshold = Number($("suspicious-threshold").value);
+  state.settingsSaving = true;
+  $("settings-error").hidden = true;
+  setBusy(true);
+  try {
+    await applyAnalysisWorkers(workers);
+    state.suspiciousThreshold = threshold;
+    try {
+      localStorage.setItem("flac-analysis-workers", String(state.analysisWorkers));
+      localStorage.setItem("flac-suspicious-threshold", String(state.suspiciousThreshold));
+    } catch { /* Optional preferences. */ }
+    $("settings-dialog").close();
+    message(`设置已保存 · ${state.analysisWorkers} 个分析进程 · 可疑勾选阈值 ≥ ${state.suspiciousThreshold} 分。`);
+  } catch (error) {
+    setText($("settings-error"), error.message);
+    $("settings-error").hidden = false;
+  } finally {
+    state.settingsSaving = false;
+    setBusy(false);
+    if (!$("settings-dialog").open) $("open-settings").focus();
+  }
+}
 function setBusy(value) {
   state.busy = value;
   $("scan-button").disabled = value;
@@ -57,32 +121,138 @@ function setBusy(value) {
   $("clear-selection").disabled = value;
   $("mode-2d").disabled = value;
   $("mode-3d").disabled = value;
+  $("interface-language").disabled = value;
+  updateSettingsControls();
   updateSelection();
   renderLibrary();
 }
 function updateSelection() {
+  const matches = suspiciousTracks();
+  const selectedMatches = matches.filter((track) => state.selected.has(track.id));
+  $("select-suspicious").disabled = state.busy || !matches.length;
+  setText($("select-suspicious"), `勾选可疑 · ≥ ${state.suspiciousThreshold} 分`);
+  $("transfer-tracks").disabled = state.busy || !selectedMatches.length;
+  setText($("transfer-tracks"), `移动／复制${selectedMatches.length ? ` · ${selectedMatches.length} 首` : ""}`);
   const max = state.mode === "2d" ? 4 : 8;
-  $("selection-count").textContent = `已选 ${state.selected.size} 首`;
-  $("selection-help").textContent = `批量分析不限数量 · ${state.mode.toUpperCase()} 对比最多 ${max} 首`;
+  setText($("selection-count"), `已选 ${state.selected.size} 首`);
+  setText($("selection-help"), `批量分析不限数量 · ${state.mode.toUpperCase()} 对比最多 ${max} 首`);
   $("compare").disabled = state.busy || !state.selected.size || state.selected.size > max;
-  $("compare").textContent = `生成对比${state.selected.size ? ` · ${state.selected.size} 首` : ""} ↗`;
+  setText($("compare"), `生成对比${state.selected.size ? ` · ${state.selected.size} 首` : ""} ↗`);
   $("analyze-selected").disabled = state.busy || !state.selected.size;
-  $("analyze-selected").textContent = `分析所选${state.selected.size ? ` · ${state.selected.size} 首` : ""}`;
+  setText($("analyze-selected"), `分析所选${state.selected.size ? ` · ${state.selected.size} 首` : ""}`);
   $("stop-analysis").hidden = !state.analyzing;
   $("stop-analysis").disabled = state.stopRequested;
-  $("stop-analysis").textContent = state.stopRequested ? "完成当前文件后停止…" : "停止后续分析";
+  setText($("stop-analysis"), state.stopRequested ? "等待正在处理的曲目完成…" : "停止后续分析");
   const all = selectionSummary(state.tracks.map((t) => t.id), state.selected);
   $("select-all").checked = all.checked;
   $("select-all").indeterminate = all.indeterminate;
   $("select-all").disabled = state.busy || !state.tracks.length;
   for (const {badge, ids, checkbox} of folderBadges) {
     const selected = selectionSummary(ids, state.selected);
-    badge.textContent = `${selected.count}/${ids.length}`;
+    setText(badge, `${selected.count}/${ids.length}`);
     badge.classList.toggle("has-selection", selected.count > 0);
-    badge.title = `已选 ${selected.count} / ${ids.length} 首（含子文件夹）`;
+    LensI18n.attribute(badge, "title", `已选 ${selected.count} / ${ids.length} 首（含子文件夹）`);
     checkbox.checked = selected.checked;
     checkbox.indeterminate = selected.indeterminate;
     checkbox.disabled = state.busy;
+  }
+}
+function suspiciousTracks() {
+  return state.tracks.filter((track) => meetsSuspiciousThreshold(reportFor(track.id), state.suspiciousThreshold));
+}
+function selectSuspicious() {
+  if (state.busy) return;
+  const matches = suspiciousTracks();
+  state.selected = new Set(matches.map((track) => track.id));
+  renderLibrary();
+  message(`已勾选 ${matches.length} 首评分 ≥ ${state.suspiciousThreshold} 分的曲目（含搜索隐藏项），已替换之前的勾选。`);
+}
+function transferOperation() {
+  return document.querySelector('input[name="transfer-operation"]:checked').value;
+}
+function updateTransferControls() {
+  for (const node of $("transfer-form").querySelectorAll("input, button")) {
+    node.disabled = state.transferRunning || (state.transferDone && node.tagName === "INPUT");
+  }
+  $("execute-transfer").disabled = state.transferRunning || state.transferDone;
+}
+function updateTransferPreview() {
+  if (!state.transferRunning && !state.transferDone) {
+    $("transfer-error").hidden = true;
+    setText($("transfer-status"), "");
+  }
+  const operation = transferOperation();
+  const verb = operation === "move" ? "移动" : "复制";
+  setText($("execute-transfer"), `开始${verb} ${state.transferTracks.length} 首`);
+  setText($("transfer-summary"), `本次处理已勾选且评分 ≥ ${state.suspiciousThreshold} 分的 ${state.transferTracks.length} 首曲目。`);
+  setText($("transfer-root"), `相对路径根目录：${state.folder}（目标路径不包含该根目录的名称）`);
+  setText($("transfer-mode-help"), operation === "move"
+    ? "移动会在完整复制成功后删除源文件；源目录中的封面和其他文件保持原位。"
+    : "复制会保留源文件；只处理列出的音频文件。");
+  const target = $("transfer-target").value.trim().replace(/[\\/]+$/, "");
+  const keep = $("keep-structure").checked;
+  $("transfer-preview").replaceChildren();
+  for (const track of state.transferTracks) {
+    const relative = keep ? track.relative_path : track.name;
+    $("transfer-preview").append(element("li", "", `${track.relative_path} → ${target ? `${target}\\` : `${t("目标目录")}\\`}${relative}`));
+  }
+}
+function openTransfer() {
+  if (state.busy) return;
+  state.transferTracks = suspiciousTracks().filter((track) => state.selected.has(track.id));
+  if (!state.transferTracks.length) return;
+  state.transferDone = false;
+  $("keep-structure").checked = true;
+  $("operation-copy").checked = true;
+  $("transfer-error").hidden = true;
+  setText($("transfer-status"), "");
+  $("transfer-results").replaceChildren();
+  updateTransferControls();
+  updateTransferPreview();
+  $("transfer-dialog").showModal();
+}
+async function executeTransfer() {
+  if (state.busy || state.transferDone) return;
+  const operation = transferOperation();
+  const verb = operation === "move" ? "移动" : "复制";
+  const body = {track_ids: state.transferTracks.map((track) => track.id),
+    target_folder: $("transfer-target").value.trim(), operation,
+    keep_structure: $("keep-structure").checked, threshold: state.suspiciousThreshold};
+  state.transferRunning = true;
+  setBusy(true);
+  updateTransferControls();
+  $("transfer-error").hidden = true;
+  setText($("transfer-status"), `正在${verb} ${body.track_ids.length} 首曲目…`);
+  try {
+    const response = await api("/api/tracks/transfer", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+    state.transferDone = true;
+    const moved = new Set(response.results.filter((item) => item.status === "moved").map((item) => item.id));
+    for (const id of moved) {
+      state.selected.delete(id);
+      state.reports.delete(id);
+      state.errors.delete(id);
+      state.data.delete(id);
+    }
+    state.tracks = state.tracks.filter((track) => !moved.has(track.id));
+    state.displayed = state.displayed.filter((track) => !moved.has(track.id));
+    setText($("track-count"), state.tracks.length);
+    const failed = response.results.filter((item) => !["copied", "moved"].includes(item.status)).length;
+    const text = `${verb}完成 ${response.results.length - failed} 首 · 未完成 ${failed} 首`;
+    setText($("transfer-status"), text);
+    for (const item of response.results) {
+      const label = {copied: "已复制", moved: "已移动", copied_not_removed: "已复制，源文件未删除", error: "失败"}[item.status];
+      $("transfer-results").append(element("li", item.error ? "operation-error" : "", `${label}：${item.source} → ${item.destination}${item.error ? `；${item.error}` : ""}`));
+    }
+    scheduleRender().catch(renderError);
+    message(`${text}。详细结果见操作弹窗。`, failed ? "error" : "");
+  } catch (error) {
+    setText($("transfer-error"), error.message);
+    $("transfer-error").hidden = false;
+    setText($("transfer-status"), "请求未完成，请核对源目录和目标目录后再重试。");
+  } finally {
+    state.transferRunning = false;
+    setBusy(false);
+    updateTransferControls();
   }
 }
 function paintResult(node, result) {
@@ -95,16 +265,16 @@ function paintResult(node, result) {
   }
 }
 function reportFor(id) {
-  if (state.activeId === id) return {status: "running", score: null};
+  if (state.activeIds.has(id)) return {status: "running", score: null};
   if (state.pending.has(id)) return {status: "queued", score: null};
   if (state.errors.has(id)) return {status: "error", score: null};
   return state.reports.get(id) || {status: "unanalysed", score: null};
 }
 function showReport(track) {
   const report = state.reports.get(track.id);
-  $("report-title").textContent = track.name;
-  $("report-path").textContent = track.relative_path;
-  $("report-verdict").textContent = resultLabel(reportFor(track.id));
+  setText($("report-title"), track.name);
+  setText($("report-path"), track.relative_path);
+  setText($("report-verdict"), resultLabel(reportFor(track.id)));
   $("report-reasons").replaceChildren();
   const reasons = state.errors.has(track.id) ? [state.errors.get(track.id)] : (report?.reasons || ["勾选此文件，点击「分析所选」。"]);
   for (const reason of reasons) $("report-reasons").append(element("li", "", reason));
@@ -136,12 +306,12 @@ function trackRow(track, compact = false) {
   const status = element("span", "analysis-badge", compact && compactLabel
     ? `${compactLabel}${Number.isFinite(result.score) ? ` ${result.score}` : ""}`
     : resultLabel(result));
-  status.title = resultLabel(result);
+  LensI18n.attribute(status, "title", resultLabel(result));
   copy.append(status);
   label.append(checkbox, copy);
   const details = element("button", "evidence-button", "详情");
   details.type = "button";
-  details.setAttribute("aria-label", `分析详情：${track.relative_path}`);
+  LensI18n.attribute(details, "aria-label", `分析详情：${track.relative_path}`);
   details.addEventListener("click", () => showReport(track));
   row.append(label, details);
   return row;
@@ -192,7 +362,7 @@ function renderLibrary() {
         const ids = allFolders.get(child.key).ids;
         const checkbox = document.createElement("input");
         checkbox.type = "checkbox";
-        checkbox.setAttribute("aria-label", `选择文件夹 ${child.key.slice(1)}（含全部子文件）`);
+        LensI18n.attribute(checkbox, "aria-label", `选择文件夹 ${child.key.slice(1)}（含全部子文件）`);
         checkbox.addEventListener("click", (event) => event.stopPropagation());
         checkbox.addEventListener("keydown", (event) => event.stopPropagation());
         checkbox.addEventListener("change", () => {
@@ -204,9 +374,9 @@ function renderLibrary() {
         const aggregate = summarizeResults(ids.map(reportFor));
         paintResult(summary, aggregate);
         const status = element("span", "analysis-badge", aggregate.label);
-        status.title = aggregate.label;
+        LensI18n.attribute(status, "title", aggregate.label);
         copy.append(status);
-        summary.title = `${child.key.slice(1)} · 勾选包含全部子文件（含搜索隐藏项）；颜色取已完成文件中的最高评分`;
+        LensI18n.attribute(summary, "title", `${child.key.slice(1)} · 勾选包含全部子文件（含搜索隐藏项）；颜色取已完成文件中的最高评分`);
         summary.append(checkbox, copy, badge);
         folderBadges.push({badge, ids, checkbox});
         details.append(summary);
@@ -240,6 +410,7 @@ async function scan() {
   try {
     const result = await api("/api/scan", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({folder: $("folder").value.trim()})});
     state.tracks = result.tracks;
+    state.folder = result.folder;
     state.selected = new Set();
     state.expandedFolders.clear();
     state.data.clear();
@@ -249,7 +420,7 @@ async function scan() {
     state.displayed = [];
     $("folder").value = result.folder;
     $("search").value = "";
-    $("track-count").textContent = result.tracks.length;
+    setText($("track-count"), result.tracks.length);
     await scheduleRender();
     message(result.tracks.length ? `找到 ${result.tracks.length} 首曲目。勾选文件或文件夹，点击「分析所选」。` : "没有找到支持的音频文件，请更换文件夹。");
   } catch (error) {
@@ -269,13 +440,17 @@ async function analyzeSelected() {
   $("analysis-meter").max = tracks.length;
   $("analysis-meter").value = 0;
   let completed = 0, failed = 0;
+  function progress() {
+    const text = `${completed} / ${tracks.length} · 正在分析 ${state.activeIds.size} 首`;
+    setText($("analysis-progress-text"), text);
+    $("analysis-meter").value = completed;
+    message(state.stopRequested ? `${text} · 等待正在处理的曲目完成后停止` : text, "busy");
+    scheduleLibraryRender();
+  }
   try {
-    for (const track of tracks) {
-      if (state.stopRequested) break;
-      state.activeId = track.id;
-      $("analysis-progress-text").textContent = `${completed} / ${tracks.length} · 正在分析 ${track.name}`;
-      message(`正在分析 ${completed + 1} / ${tracks.length}：${track.name}`, "busy");
-      renderLibrary();
+    await runAnalysisQueue(tracks, state.analysisWorkers, async (track) => {
+      state.activeIds.add(track.id);
+      progress();
       try {
         const data = await api(`/api/tracks/${track.id}/analysis`);
         state.reports.set(track.id, data.forensics);
@@ -286,18 +461,17 @@ async function analyzeSelected() {
         state.errors.set(track.id, error.message);
       }
       state.pending.delete(track.id);
-      state.activeId = null;
+      state.activeIds.delete(track.id);
       completed++;
-      $("analysis-meter").value = completed;
-      renderLibrary();
-    }
+      progress();
+    }, () => state.stopRequested);
   } finally {
     state.pending.clear();
-    state.activeId = null;
+    state.activeIds.clear();
     state.analyzing = false;
     setBusy(false);
     const text = `${completed < tracks.length ? "已停止" : "分析完成"} · 已处理 ${completed} / ${tracks.length} · 失败 ${failed}`;
-    $("analysis-progress-text").textContent = text;
+    setText($("analysis-progress-text"), text);
     message(`${text}。结果已标在文件树上，点击「详情」查看依据。`, failed ? "error" : "");
   }
 }
@@ -306,12 +480,14 @@ async function compare() {
   const ids = [...state.selected];
   if (ids.length > (state.mode === "2d" ? 4 : 8)) return;
   setBusy(true);
-  const results = [];
+  const results = new Array(ids.length);
+  let completed = 0;
   try {
-    for (let i = 0; i < ids.length; i++) {
-      const id = ids[i];
+    await runAnalysisQueue(ids, state.analysisWorkers, async (id, i) => {
       const track = state.tracks.find((t) => t.id === id);
-      message(`正在分析 ${i + 1} / ${ids.length}：${track.name} · 首次读取将覆盖整首音频`, "busy");
+      state.activeIds.add(id);
+      scheduleLibraryRender();
+      message(`正在准备对比 ${completed} / ${ids.length}：${track.name} · 首次读取将覆盖整首音频`, "busy");
       try {
         // The server caches by file size and modification time. Request every
         // comparison so replacing a file cannot silently reuse stale plots.
@@ -319,21 +495,26 @@ async function compare() {
         state.data.set(id, data);
         state.reports.set(id, data.forensics);
         state.errors.delete(id);
-        results.push(data);
+        results[i] = data;
       } catch (error) {
         state.errors.set(id, error.message);
         state.reports.delete(id);
         state.data.delete(id);
+      } finally {
+        completed++;
+        state.activeIds.delete(id);
+        scheduleLibraryRender();
       }
-    }
-    state.displayed = results;
+    });
+    state.displayed = results.filter(Boolean);
     state.cameraRevision++;
     // Only retain the active selection in the browser; the server has an LRU.
     for (const id of state.data.keys()) if (!state.selected.has(id)) state.data.delete(id);
     await scheduleRender();
-    const failures = ids.length - results.length;
-    const silent = results.filter((d) => d.summary.silent).length;
-    message(failures ? `${results.length} 首已显示，${failures} 首分析失败。左侧可查看具体原因，重新生成可重试。` : `已显示 ${results.length} 首曲目 · 全曲分析 · ${state.mode === "2d" ? "统一坐标与色阶" : "拖动图表旋转视角"}${silent ? ` · ${silent} 首为静音` : ""}`, failures ? "error" : "");
+    const count = state.displayed.length;
+    const failures = ids.length - count;
+    const silent = state.displayed.filter((d) => d.summary.silent).length;
+    message(failures ? `${count} 首已显示，${failures} 首分析失败。左侧可查看具体原因，重新生成可重试。` : `已显示 ${count} 首曲目 · 全曲分析 · ${state.mode === "2d" ? "统一坐标与色阶" : "拖动图表旋转视角"}${silent ? ` · ${silent} 首为静音` : ""}`, failures ? "error" : "");
   } catch (error) {
     message(`图表渲染失败：${error.message}。可尝试 2D 模式。`, "error");
   } finally {
@@ -360,7 +541,7 @@ function commonLayout() {
   return {paper_bgcolor: "#151c21", plot_bgcolor: "#151c21", font: {family: '"Segoe UI", "Microsoft YaHei", sans-serif', color: "#a8b6b0", size: 10}, margin: {l: 65, r: 30, t: 30, b: 55}, showlegend: false, hoverlabel: {bgcolor: "#202b30", font: {color: "#e5ebe7"}}, uirevision: `${state.mode}-${state.cameraRevision}`, autosize: true};
 }
 function axis(title, range) {
-  return {title: {text: title, font: {size: 11}, standoff: 12}, range, gridcolor: "#2a343a", zerolinecolor: "#39463f", linecolor: "#39463f", tickfont: {size: 10}, automargin: true};
+  return {title: {text: t(title), font: {size: 11}, standoff: 12}, range, gridcolor: "#2a343a", zerolinecolor: "#39463f", linecolor: "#39463f", tickfont: {size: 10}, automargin: true};
 }
 function camera() { return {eye: {x: 1.65, y: -2.0, z: 1.15}, projection: {type: "orthographic"}}; }
 function ranges() {
@@ -402,7 +583,7 @@ async function drawSpectrum(context) {
   });
   const layout = commonLayout();
   if (is3d) {
-    layout.scene = {xaxis: axis("Frequency (kHz)", [0, r.frequency]), yaxis: {...axis("曲目", [.5, context.data.length + .5]), tickvals: context.data.map((_, i) => i + 1), ticktext: context.data.map((_, i) => `曲目 ${i + 1}`)}, zaxis: axis("Relative magnitude (dB)", [r.floor, 0]), camera: camera(), aspectmode: "manual", aspectratio: {x: 1.8, y: context.gap, z: .85}, bgcolor: "#151c21"};
+    layout.scene = {xaxis: axis("Frequency (kHz)", [0, r.frequency]), yaxis: {...axis("曲目", [.5, context.data.length + .5]), tickvals: context.data.map((_, i) => i + 1), ticktext: context.data.map((_, i) => t(`曲目 ${i + 1}`))}, zaxis: axis("Relative magnitude (dB)", [r.floor, 0]), camera: camera(), aspectmode: "manual", aspectratio: {x: 1.8, y: context.gap, z: .85}, bgcolor: "#151c21"};
     layout.margin = {l: 10, r: 10, t: 5, b: 10};
   } else {
     layout.xaxis = axis("Frequency (kHz)", [0, r.frequency]);
@@ -447,7 +628,7 @@ async function drawSpectrogram(context) {
   const rows = Math.ceil(count / columns);
   const colorbar = {title: {text: "dB", side: "top"}, thickness: 9, len: .92, outlinewidth: 0, tickfont: {size: 9}, x: 1.015};
   if (is3d) {
-    layout.scene = {xaxis: axis(timeTitle, [0, r.time]), yaxis: axis("Frequency (kHz)", [0, r.frequency]), zaxis: {...axis("曲目层", [.7, count + .35]), tickvals: context.data.map((_, i) => i + 1), ticktext: context.data.map((_, i) => `曲目 ${i + 1}`)}, camera: camera(), aspectmode: "manual", aspectratio: {x: 1.8, y: 1.1, z: context.gap}, bgcolor: "#151c21"};
+    layout.scene = {xaxis: axis(timeTitle, [0, r.time]), yaxis: axis("Frequency (kHz)", [0, r.frequency]), zaxis: {...axis("曲目层", [.7, count + .35]), tickvals: context.data.map((_, i) => i + 1), ticktext: context.data.map((_, i) => t(`曲目 ${i + 1}`))}, camera: camera(), aspectmode: "manual", aspectratio: {x: 1.8, y: 1.1, z: context.gap}, bgcolor: "#151c21"};
     layout.margin = {l: 10, r: 55, t: 10, b: 15};
   } else {
     layout.annotations = [];
@@ -480,7 +661,7 @@ async function drawSpectrogram(context) {
     }
   });
   $("spectrogram-plot").style.height = `${is3d ? 570 : rows * 250 + 70}px`;
-  $("spectrogram-caption").textContent = is3d ? "Frequency — Time · 高度代表曲目层，颜色代表相对功率" : "Frequency — Time · 相同频率、时间范围与色阶";
+  setText($("spectrogram-caption"), is3d ? "Frequency — Time · 高度代表曲目层，颜色代表相对功率" : "Frequency — Time · 相同频率、时间范围与色阶");
   await Plotly.react("spectrogram-plot", traces, layout, plotConfig);
 }
 async function scheduleRender() {
@@ -511,7 +692,7 @@ function renderError(error) { message(`图表渲染失败：${error.message}。�
 async function exportChart(id, filename) {
   const button = id === "spectrum-plot" ? $("export-spectrum") : $("export-spectrogram");
   button.disabled = true;
-  button.textContent = "生成 PNG…";
+  setText(button, "生成 PNG…");
   try {
     if (renderPromise) await renderPromise;
     const plot = $(id);
@@ -527,11 +708,16 @@ async function exportChart(id, filename) {
     $("export-image").src = url;
     $("export-download").href = url;
     $("export-download").download = `${filename}.png`;
-    $("export-title").textContent = `${id === "spectrum-plot" ? "频谱" : "时频图"} · PNG 预览`;
+    setText($("export-title"), `${id === "spectrum-plot" ? "频谱" : "时频图"} · PNG 预览`);
     $("export-dialog").showModal();
   } catch (error) { message(`导出失败：${error.message}`, "error"); }
-  finally { button.disabled = false; button.textContent = "导出 PNG ↓"; }
+  finally { button.disabled = false; setText(button, "导出 PNG ↓"); }
 }
+$("interface-language").addEventListener("change", () => {
+  LensI18n.setLanguage($("interface-language").value);
+  renderLibrary();
+  scheduleRender().catch(renderError);
+});
 $("scan-form").addEventListener("submit", (event) => { event.preventDefault(); scan(); });
 $("search").addEventListener("input", renderLibrary);
 $("view-tree").addEventListener("click", () => setLibraryView("tree"));
@@ -557,6 +743,21 @@ $("select-all").addEventListener("change", () => {
   renderLibrary();
 });
 $("analyze-selected").addEventListener("click", analyzeSelected);
+$("select-suspicious").addEventListener("click", selectSuspicious);
+$("transfer-tracks").addEventListener("click", openTransfer);
+$("transfer-form").addEventListener("submit", (event) => { event.preventDefault(); executeTransfer(); });
+for (const id of ["close-transfer", "cancel-transfer"]) $(id).addEventListener("click", () => $("transfer-dialog").close());
+$("transfer-dialog").addEventListener("cancel", (event) => { if (state.transferRunning) event.preventDefault(); });
+$("transfer-dialog").addEventListener("close", () => { ($("transfer-tracks").disabled ? $("search") : $("transfer-tracks")).focus(); });
+for (const id of ["transfer-target", "keep-structure", "operation-copy", "operation-move"]) $(id).addEventListener("input", updateTransferPreview);
+$("open-settings").addEventListener("click", openSettings);
+$("settings-form").addEventListener("submit", (event) => { event.preventDefault(); saveAnalysisWorkers(); });
+for (const id of ["close-settings", "cancel-settings"]) $(id).addEventListener("click", () => $("settings-dialog").close());
+$("settings-dialog").addEventListener("cancel", (event) => { if (state.settingsSaving) event.preventDefault(); });
+$("restore-settings").addEventListener("click", () => {
+  $("analysis-workers").value = String(state.defaultAnalysisWorkers);
+  $("suspicious-threshold").value = "35";
+});
 $("stop-analysis").addEventListener("click", () => { state.stopRequested = true; updateSelection(); });
 $("close-report").addEventListener("click", () => $("report-dialog").close());
 $("compare").addEventListener("click", compare);
@@ -575,9 +776,27 @@ window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer
   try {
     if (!window.Plotly) throw new Error("图表库未能加载。请确认已安装 requirements-web.txt，然后刷新页面。");
     const config = await api("/api/config");
+    state.analysisWorkers = config.analysis_workers;
+    try {
+      const saved = localStorage.getItem("flac-suspicious-threshold");
+      const threshold = Number(saved);
+      if (saved !== null && Number.isInteger(threshold) && threshold >= 0 && threshold <= 100) state.suspiciousThreshold = threshold;
+    } catch { /* Optional preference. */ }
+    $("suspicious-threshold").value = String(state.suspiciousThreshold);
+    state.defaultAnalysisWorkers = config.default_analysis_workers;
+    setText($("analysis-workers-default"), `默认 ${state.defaultAnalysisWorkers} 个进程（根据 CPU 核心数，上限为 4）。可设置 1–${config.max_analysis_workers}。`);
+    $("analysis-workers").max = String(config.max_analysis_workers);
+    $("analysis-workers").value = String(state.analysisWorkers);
+    let savedWorkers;
+    try { savedWorkers = Number(localStorage.getItem("flac-analysis-workers")); } catch { /* Optional preference. */ }
+    if (Number.isInteger(savedWorkers) && savedWorkers >= 1 && savedWorkers <= config.max_analysis_workers && savedWorkers !== state.analysisWorkers) {
+      try { await applyAnalysisWorkers(savedWorkers); }
+      catch (error) { message(`未能恢复分析进程数：${error.message}`, "error"); }
+    }
+    state.settingsReady = true;
     $("folder").value = config.default_folder;
     $("format-help").title = config.supported_extensions.join(" / ");
-    $("format-help").textContent = config.ffmpeg_available ? "包含子文件夹 · 常见无损 / 有损音频" : "包含子文件夹 · M4A / AAC 等格式需安装 FFmpeg";
+    setText($("format-help"), config.ffmpeg_available ? "包含子文件夹 · 常见无损 / 有损音频" : "包含子文件夹 · M4A / AAC 等格式需安装 FFmpeg");
     await scan();
   } catch (error) { message(error.message, "error"); }
 })();

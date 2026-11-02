@@ -7,6 +7,9 @@ function selectionSummary(ids, selected) {
 function toggleSelection(ids, selected, checked) {
   for (const id of ids) { if (checked) selected.add(id); else selected.delete(id); }
 }
+function meetsSuspiciousThreshold(result, threshold) {
+  return ["clear", "suspicious"].includes(result.status) && Number.isFinite(result.score) && result.score >= threshold;
+}
 function resultLabel(result) {
   const labels = {unanalysed: "未分析", queued: "等待分析", running: "正在分析…", error: "分析失败 · 可重试",
     inconclusive: "证据不足", lossy: "已知有损格式 · 不适用", clear: "未检测出明显特征", suspicious: "检测出可疑特征"};
@@ -23,4 +26,4 @@ function summarizeResults(results) {
   return {status, score: worst?.score ?? null,
     label: `已分析 ${completed.length}/${results.length}${suspicious ? ` · 可疑 ${suspicious}` : ""}${worst ? ` · 最高 ${worst.score}` : ""}${failures ? ` · 失败 ${failures}` : ""}${pending ? " · 分析中" : ""}`};
 }
-if (typeof module !== "undefined") module.exports = {selectionSummary, toggleSelection, resultLabel, summarizeResults};
+if (typeof module !== "undefined") module.exports = {selectionSummary, toggleSelection, meetsSuspiciousThreshold, resultLabel, summarizeResults};

@@ -2,7 +2,7 @@
 
 Channels are averaged in the power domain, so opposite-phase stereo does not
 cancel out. Display reduction uses maxima to retain narrow peaks/transients.
-This module does not change the notebook/CLI's forensic heuristics.
+The CLI shares cutoff and spectral-edge helpers; Web screening uses web_forensics.
 """
 from __future__ import annotations
 
