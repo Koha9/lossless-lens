@@ -4,7 +4,7 @@
 
 A local audio screening and spectrum comparison tool. Scan a music library for signs of lossy transcoding, upsampling and padded bit depth, then compare tracks in 2D or 3D.
 
-**[Quick start](#quick-start)** · [Usage guide (Chinese)](docs/usage.md) · [Command line](#other-ways-to-use-it)
+**[Download for Windows](#download-for-windows-no-python-needed)** · [From source](#quick-start-from-source) · [Usage guide (Chinese)](docs/usage.md) · [Command line](#other-ways-to-use-it)
 
 > Scores measure suspicious features, not authenticity probabilities. Recording bandwidth and mastering filters can produce similar signs. A clean result does not prove a genuine lossless source.
 
@@ -28,7 +28,18 @@ A local audio screening and spectrum comparison tool. Scan a music library for s
 
 Screenshots use synthetic audio illustrating broadband, a 16 kHz low-pass filter and 16-bit padding. The interface supports English and Simplified Chinese; switch languages in the header.
 
-## Quick start
+## Download for Windows (no Python needed)
+
+1. Download **LosslessLens-windows-x64.zip** from the [latest release](https://github.com/Koha9/lossless-lens/releases/latest).
+2. Extract the **whole zip** to any folder (do not run it from inside the zip).
+3. Double-click **LosslessLens.exe**. A black window opens and your browser shows the app. Enter your music folder in the page, select tracks and click **Analyze**.
+4. Close the black window to quit.
+
+If Windows SmartScreen warns that the app is unsigned, click **More info → Run anyway**. MP3/M4A/OGG and similar formats may need [FFmpeg](docs/usage.md#音频格式与-ffmpeg) on PATH. Developers can build the zip with `.\build_onedir.ps1 -Zip`, or push a `v*` tag to have GitHub Actions publish it.
+
+## Quick start (from source)
+
+
 
 Python 3.12 is recommended. Run these commands in a terminal with Conda available:
 

@@ -28,7 +28,18 @@
 
 截图使用合成演示音频，展示宽频信号、16 kHz 低通和 16-bit 补零特征。界面支持 English 与简体中文，可在页面右上角切换。
 
-## 快速开始
+## Windows 下载使用（无需 Python）
+
+1. 在[最新 Release](https://github.com/Koha9/lossless-lens/releases/latest)下载 **LosslessLens-windows-x64.zip**。
+2. 把 zip **完整解压**到任意文件夹（不要在压缩包内直接运行）。
+3. 双击 **LosslessLens.exe**，会出现黑色窗口并自动打开浏览器；在页面输入音乐文件夹，选择曲目后点击“分析”。
+4. 关闭黑色窗口即可退出。
+
+若 SmartScreen 提示未签名，点击“更多信息 → 仍要运行”。MP3/M4A/OGG 等格式可能需要把 [FFmpeg](docs/usage.md#音频格式与-ffmpeg) 加入 PATH。开发者可用 `.\build_onedir.ps1 -Zip` 自行打包，或推送 `v*` 标签由 GitHub Actions 自动发布。
+
+## 从源码运行
+
+
 
 推荐 Python 3.12。以下命令在已安装 Conda 的终端执行：
 

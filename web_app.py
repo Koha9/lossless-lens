@@ -290,5 +290,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="FLAC 本地频谱对比 Web UI")
     parser.add_argument("--folder", type=Path, default=Path.cwd(), help="默认音频文件夹，递归扫描")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--no-browser", action="store_true", help="启动后不自动打开浏览器")
     args = parser.parse_args()
+    url = f"http://127.0.0.1:{args.port}"
+    print(f"LosslessLens: {url}  (close this window or press Ctrl+C to quit)", flush=True)
+    if not args.no_browser:
+        import webbrowser
+        threading.Timer(1.5, webbrowser.open, args=(url,)).start()
     uvicorn.run(create_app(args.folder), host="127.0.0.1", port=args.port)

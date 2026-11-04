@@ -1,0 +1,32 @@
+name: Release (Windows)
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements-web.txt
+      - run: python -m unittest discover -s tests
+      - run: ./build_onedir.ps1 -Zip
+        shell: pwsh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LosslessLens-windows-x64
+          path: dist/LosslessLens-windows-x64.zip
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/LosslessLens-windows-x64.zip
+          generate_release_notes: true
