@@ -51,7 +51,7 @@ conda run -n flac-forensics python -m pip install -r requirements-web.txt
 conda run --no-capture-output -n flac-forensics python web_app.py --folder "D:\Music"
 ```
 
-[http://127.0.0.1:8765](http://127.0.0.1:8765) を開き、曲を選択して **Analyze selected** または **Compare** をクリックします。最初のスキャンではファイルの一覧のみを取得し、自動解析は行いません。
+コンソールに表示されたアドレス（例：`http://127.0.0.1:<port>`、ポートは自動割り当て） を開き、曲を選択して **Analyze selected** または **Compare** をクリックします。最初のスキャンではファイルの一覧のみを取得し、自動解析は行いません。
 
 - `D:\Music` を音声フォルダーに置き換えてください。UNC パスも使えます。`--folder` を省略すると起動フォルダーを使い、`--port` でポートを変更できます。
 - SoundFile がデコードできない形式には **FFmpeg / ffprobe** が必要です。[設定方法（簡体字中国語）](docs/usage.md#音频格式与-ffmpeg)をご覧ください。

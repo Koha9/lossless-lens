@@ -91,7 +91,7 @@ Conda 安装位置不同，或使用其他 Python 环境时，替换 `-Python` �
 
 ```powershell
 Set-Location .\dist\LosslessLens
-.\LosslessLens.exe --folder "D:\Music" --port 8765
+.\LosslessLens.exe --folder "D:\Music" --port 19000
 ```
 
 ## 开发与测试
