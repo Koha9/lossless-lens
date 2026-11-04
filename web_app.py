@@ -1,4 +1,4 @@
-"""Run with: python web_app.py [--folder PATH] [--port 8765]."""
+"""Run with: python web_app.py [--folder PATH] [--port 0]. Port 0 = OS picks a free port."""
 from __future__ import annotations
 
 import argparse
@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 import hashlib
 import multiprocessing
 import os
+import socket
 from pathlib import Path
 import threading
 from typing import Literal
@@ -289,12 +290,22 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="FLAC 本地频谱对比 Web UI")
     parser.add_argument("--folder", type=Path, default=Path.cwd(), help="默认音频文件夹，递归扫描")
-    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--port", type=int, default=0, help="监听端口；0 表示由系统自动分配可用端口（默认）")
     parser.add_argument("--no-browser", action="store_true", help="启动后不自动打开浏览器")
     args = parser.parse_args()
-    url = f"http://127.0.0.1:{args.port}"
+    # Bind ourselves so the real port is known before printing / opening the browser.
+    # Port 0 lets the OS pick a free port, avoiding Windows reserved ranges (WinError 10013).
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("127.0.0.1", args.port))
+    except OSError as exc:
+        sock.close()
+        raise SystemExit(f"无法绑定 127.0.0.1:{args.port}（{exc}）。请改用 --port 0 让系统自动分配端口。")
+    port = sock.getsockname()[1]
+    url = f"http://127.0.0.1:{port}"
     print(f"LosslessLens: {url}  (close this window or press Ctrl+C to quit)", flush=True)
     if not args.no_browser:
         import webbrowser
         threading.Timer(1.5, webbrowser.open, args=(url,)).start()
-    uvicorn.run(create_app(args.folder), host="127.0.0.1", port=args.port)
+    config = uvicorn.Config(create_app(args.folder), host="127.0.0.1", port=port)
+    uvicorn.Server(config).run(sockets=[sock])

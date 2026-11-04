@@ -5,7 +5,7 @@ LosslessLens (Windows)
    请先把 zip 完整解压到任意文件夹（不要在压缩包内直接运行）。
 2. Double-click  LosslessLens.exe  (or Start-LosslessLens.bat).
    双击 LosslessLens.exe（或 Start-LosslessLens.bat）。
-3. A black window opens and your browser shows the app at http://127.0.0.1:8765.
+3. A black window opens and your browser shows the app at the address printed in the window (a free port is chosen automatically).
    会出现一个黑色窗口，并自动打开浏览器页面。
 4. Enter your music folder in the page, then select tracks and click Analyze.
    在页面里输入音乐文件夹路径，选择曲目后点击 Analyze（分析）。

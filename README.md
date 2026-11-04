@@ -51,7 +51,7 @@ conda run -n flac-forensics python -m pip install -r requirements-web.txt
 conda run --no-capture-output -n flac-forensics python web_app.py --folder "D:\Music"
 ```
 
-Open [http://127.0.0.1:8765](http://127.0.0.1:8765), select tracks and click **Analyze selected** or **Compare**. The initial scan lists files without analyzing them.
+Open the address printed in the console (e.g. `http://127.0.0.1:<port>`; the port is chosen automatically), select tracks and click **Analyze selected** or **Compare**. The initial scan lists files without analyzing them.
 
 - Replace `D:\Music` with your audio folder, including a UNC path if needed. Without `--folder`, the app uses its startup directory; `--port` changes the port.
 - Formats SoundFile cannot decode require **FFmpeg / ffprobe**. See the [format guide (Chinese)](docs/usage.md#音频格式与-ffmpeg).

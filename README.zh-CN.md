@@ -51,7 +51,7 @@ conda run -n flac-forensics python -m pip install -r requirements-web.txt
 conda run --no-capture-output -n flac-forensics python web_app.py --folder "D:\Music"
 ```
 
-打开 [http://127.0.0.1:8765](http://127.0.0.1:8765)，勾选曲目后点击「分析所选」或「生成对比」。首次扫描只列出文件，不自动分析。
+打开 控制台打印的地址（形如 `http://127.0.0.1:<port>`，端口由系统自动分配），勾选曲目后点击「分析所选」或「生成对比」。首次扫描只列出文件，不自动分析。
 
 - 将 `D:\Music` 替换为音频目录，也可使用 UNC 路径。省略 `--folder` 时使用启动目录，`--port` 可更改端口。
 - SoundFile 无法解码的格式需要 **FFmpeg / ffprobe**，配置方法见[使用指南](docs/usage.md#音频格式与-ffmpeg)。
