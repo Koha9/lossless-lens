@@ -1,5 +1,6 @@
 param(
-    [string]$Python = 'python'
+    [string]$Python = 'python',
+    [switch]$Zip
 )
 
 $ErrorActionPreference = 'Stop'
@@ -107,6 +108,13 @@ try {
         Remove-Item -LiteralPath $targetPath -Recurse -Force
     }
     Get-ChildItem -LiteralPath $stagedPackage -Force | Copy-Item -Destination $outputDir -Recurse -Force
+    Copy-Item -Path (Join-Path $project 'packaging\*') -Destination $outputDir -Force
+    if ($Zip) {
+        $zipPath = Join-Path $project 'dist\LosslessLens-windows-x64.zip'
+        if (Test-Path $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
+        Compress-Archive -Path $outputDir -DestinationPath $zipPath
+        Write-Host "Release zip: $zipPath"
+    }
     Write-Host "Built and startup-checked: $(Join-Path $outputDir 'LosslessLens.exe')"
 }
 finally {
