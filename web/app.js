@@ -127,6 +127,8 @@ function setBusy(value) {
   renderLibrary();
 }
 function updateSelection() {
+  $("clear-selection").disabled = state.busy || !state.selected.size;
+  $("invert-selection").disabled = state.busy || !state.tracks.length;
   const matches = suspiciousTracks();
   const selectedMatches = matches.filter((track) => state.selected.has(track.id));
   $("select-suspicious").disabled = state.busy || !matches.length;
@@ -170,31 +172,60 @@ function selectSuspicious() {
 function transferOperation() {
   return document.querySelector('input[name="transfer-operation"]:checked').value;
 }
+function transferBody() {
+  return {track_ids: state.transferTracks.map(track => track.id),
+    target_folder: $("transfer-target").value.trim(), operation: transferOperation(),
+    keep_structure: $("keep-structure").checked, folder_mode: $("folder-mode").checked,
+    threshold: state.suspiciousThreshold};
+}
 function updateTransferControls() {
   for (const node of $("transfer-form").querySelectorAll("input, button")) {
     node.disabled = state.transferRunning || (state.transferDone && node.tagName === "INPUT");
   }
-  $("execute-transfer").disabled = state.transferRunning || state.transferDone;
+  $("preview-transfer").disabled = state.transferRunning || state.transferDone || !$("transfer-target").value.trim();
+  $("execute-transfer").disabled = state.transferRunning || state.transferDone || !state.transferPreview;
 }
 function updateTransferPreview() {
-  if (!state.transferRunning && !state.transferDone) {
-    $("transfer-error").hidden = true;
-    setText($("transfer-status"), "");
-  }
-  const operation = transferOperation();
-  const verb = operation === "move" ? "移动" : "复制";
-  setText($("execute-transfer"), `开始${verb} ${state.transferTracks.length} 首`);
+  state.transferPreview = null;
+  $("transfer-preview").replaceChildren();
+  setText($("transfer-totals"), "输入变更后需重新预览，再确认执行。");
+  $("transfer-error").hidden = true;
+  setText($("transfer-status"), "");
+  setText($("execute-transfer"), "确认并执行");
   setText($("transfer-summary"), `本次处理已勾选且评分 ≥ ${state.suspiciousThreshold} 分的 ${state.transferTracks.length} 首曲目。`);
   setText($("transfer-root"), `相对路径根目录：${state.folder}（目标路径不包含该根目录的名称）`);
-  setText($("transfer-mode-help"), operation === "move"
-    ? "移动会在完整复制成功后删除源文件；源目录中的封面和其他文件保持原位。"
-    : "复制会保留源文件；只处理列出的音频文件。");
-  const target = $("transfer-target").value.trim().replace(/[\\/]+$/, "");
-  const keep = $("keep-structure").checked;
-  $("transfer-preview").replaceChildren();
-  for (const track of state.transferTracks) {
-    const relative = keep ? track.relative_path : track.name;
-    $("transfer-preview").append(element("li", "", `${track.relative_path} → ${target ? `${target}\\` : `${t("目标目录")}\\`}${relative}`));
+  setText($("transfer-mode-help"), $("folder-mode").checked
+    ? "整目录递归包含其他音频、图片、隐藏文件和子目录；完整复制后才删除源。扫描根目录不可整理。"
+    : "仅处理所选音频；复制保留源，移动在完整复制后删除源文件。");
+  updateTransferControls();
+}
+async function previewTransfer() {
+  if (state.busy || state.transferDone) return;
+  state.transferRunning = true;
+  state.transferPreview = null;
+  setBusy(true);
+  updateTransferControls();
+  $("transfer-error").hidden = true;
+  try {
+    const body = transferBody();
+    const preview = await api("/api/tracks/transfer/preview", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+    state.transferPreview = {body, preview};
+    $("transfer-preview").replaceChildren();
+    for (const unit of preview.units) {
+      const li = element("li");
+      li.append(element("p", "transfer-path", `${unit.source} → ${unit.destination}`),
+        element("p", "", `影响音频 ${unit.affected_track_ids.length} · 文件 ${unit.file_count} · 目录 ${unit.directory_count} · ${unit.total_bytes} B`));
+      $("transfer-preview").append(li);
+    }
+    const n = preview.totals;
+    setText($("transfer-totals"), `操作单元 ${n.units} · 文件 ${n.files} · 目录 ${n.directories} · ${n.bytes} B`);
+  } catch (error) {
+    setText($("transfer-error"), error.message);
+    $("transfer-error").hidden = false;
+  } finally {
+    state.transferRunning = false;
+    setBusy(false);
+    updateTransferControls();
   }
 }
 function openTransfer() {
@@ -202,6 +233,7 @@ function openTransfer() {
   state.transferTracks = suspiciousTracks().filter((track) => state.selected.has(track.id));
   if (!state.transferTracks.length) return;
   state.transferDone = false;
+  $("folder-mode").checked = false;
   $("keep-structure").checked = true;
   $("operation-copy").checked = true;
   $("transfer-error").hidden = true;
@@ -212,12 +244,12 @@ function openTransfer() {
   $("transfer-dialog").showModal();
 }
 async function executeTransfer() {
-  if (state.busy || state.transferDone) return;
-  const operation = transferOperation();
+  if (state.busy || state.transferDone || !state.transferPreview) return;
+  const {body: confirmed, preview} = state.transferPreview;
+  if (JSON.stringify(confirmed) !== JSON.stringify(transferBody())) { updateTransferPreview(); return; }
+  const body = {...confirmed, preview_token: preview.preview_token};
+  const operation = body.operation;
   const verb = operation === "move" ? "移动" : "复制";
-  const body = {track_ids: state.transferTracks.map((track) => track.id),
-    target_folder: $("transfer-target").value.trim(), operation,
-    keep_structure: $("keep-structure").checked, threshold: state.suspiciousThreshold};
   state.transferRunning = true;
   setBusy(true);
   updateTransferControls();
@@ -226,26 +258,35 @@ async function executeTransfer() {
   try {
     const response = await api("/api/tracks/transfer", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
     state.transferDone = true;
-    const moved = new Set(response.results.filter((item) => item.status === "moved").map((item) => item.id));
+    const moved = new Set(response.removed_track_ids);
     for (const id of moved) {
       state.selected.delete(id);
       state.reports.delete(id);
       state.errors.delete(id);
       state.data.delete(id);
+      state.pending.delete(id);
+      state.activeIds.delete(id);
     }
     state.tracks = state.tracks.filter((track) => !moved.has(track.id));
     state.displayed = state.displayed.filter((track) => !moved.has(track.id));
     setText($("track-count"), state.tracks.length);
     const failed = response.results.filter((item) => !["copied", "moved"].includes(item.status)).length;
-    const text = `${verb}完成 ${response.results.length - failed} 首 · 未完成 ${failed} 首`;
+    const text = `${verb}完成 ${response.results.length - failed} 项 · 未完成 ${failed} 项`;
     setText($("transfer-status"), text);
     for (const item of response.results) {
-      const label = {copied: "已复制", moved: "已移动", copied_not_removed: "已复制，源文件未删除", error: "失败"}[item.status];
+      const label = {copied: "已复制", moved: "已移动", copied_not_removed: body.folder_mode ? "已复制，部分源残留" : "已复制，源文件未删除", error: "失败"}[item.status];
       $("transfer-results").append(element("li", item.error ? "operation-error" : "", `${label}：${item.source} → ${item.destination}${item.error ? `；${item.error}` : ""}`));
+    }
+    for (const item of response.results) {
+      if (!item.error) continue;
+      for (const [key, label] of [["remaining_sources", "源残留"], ["residual_targets", "目标残留"]]) {
+        for (const path of item[key] || []) $("transfer-results").append(element("li", "transfer-path", `${label}：${path}`));
+      }
     }
     scheduleRender().catch(renderError);
     message(`${text}。详细结果见操作弹窗。`, failed ? "error" : "");
   } catch (error) {
+    state.transferPreview = null;
     setText($("transfer-error"), error.message);
     $("transfer-error").hidden = false;
     setText($("transfer-status"), "请求未完成，请核对源目录和目标目录后再重试。");
@@ -439,42 +480,42 @@ async function analyzeSelected() {
   $("analysis-progress").hidden = false;
   $("analysis-meter").max = tracks.length;
   $("analysis-meter").value = 0;
-  let completed = 0, failed = 0;
-  function progress() {
-    const text = `${completed} / ${tracks.length} · 正在分析 ${state.activeIds.size} 首`;
+  function progress(snapshot) {
+    state.activeIds = new Set(snapshot.active.map(({item}) => item.id));
+    state.stopRequested = snapshot.status === "stopping" || snapshot.status === "stopped";
+    const label = {idle: "未开始", running: "分析中", stopping: "停止中（等待在途请求）", stopped: "已停止", completed: "分析完成"}[snapshot.status];
+    const text = `${label} · 已处理 ${snapshot.completed} / ${snapshot.total} · 成功 ${snapshot.succeeded} · 失败 ${snapshot.failed} · 未启动 ${snapshot.notStarted}`;
     setText($("analysis-progress-text"), text);
-    $("analysis-meter").value = completed;
-    message(state.stopRequested ? `${text} · 等待正在处理的曲目完成后停止` : text, "busy");
+    setText($("analysis-counts"), text);
+    $("analysis-meter").value = snapshot.completed;
+    $("analysis-active").replaceChildren();
+    for (const {item} of snapshot.active) $("analysis-active").append(element("li", "transfer-path", `${item.relative_path} · 正在处理`));
+    if (!snapshot.active.length) $("analysis-active").append(element("li", "", "没有正在处理的曲目。"));
+    message(text, snapshot.failed ? "error" : state.analyzing ? "busy" : "");
+    updateSelection();
     scheduleLibraryRender();
   }
-  try {
-    await runAnalysisQueue(tracks, state.analysisWorkers, async (track) => {
-      state.activeIds.add(track.id);
-      progress();
-      try {
-        const data = await api(`/api/tracks/${track.id}/analysis`);
-        state.reports.set(track.id, data.forensics);
-        state.errors.delete(track.id);
-      } catch (error) {
-        failed++;
-        state.reports.delete(track.id);
-        state.errors.set(track.id, error.message);
-      }
-      state.pending.delete(track.id);
-      state.activeIds.delete(track.id);
-      completed++;
-      progress();
-    }, () => state.stopRequested);
-  } finally {
+  state.analysisRun = createAnalysisRun(tracks, state.analysisWorkers, async (track) => {
+    try {
+      const data = await api(`/api/tracks/${track.id}/analysis`);
+      state.reports.set(track.id, data.forensics);
+      state.errors.delete(track.id);
+    } catch (error) {
+      state.reports.delete(track.id);
+      state.errors.set(track.id, error.message);
+      throw error;
+    } finally { state.pending.delete(track.id); }
+  }, progress);
+  try { await state.analysisRun.start(); }
+  finally {
     state.pending.clear();
     state.activeIds.clear();
     state.analyzing = false;
     setBusy(false);
-    const text = `${completed < tracks.length ? "已停止" : "分析完成"} · 已处理 ${completed} / ${tracks.length} · 失败 ${failed}`;
-    setText($("analysis-progress-text"), text);
-    message(`${text}。结果已标在文件树上，点击「详情」查看依据。`, failed ? "error" : "");
+    progress(state.analysisRun.getSnapshot());
   }
 }
+
 async function compare() {
   if (state.busy || !state.selected.size) return;
   const ids = [...state.selected];
@@ -733,11 +774,18 @@ $("collapse-folders").addEventListener("click", () => {
   renderLibrary();
 });
 $("clear-selection").addEventListener("click", () => {
-  state.selected.clear();
+  if (state.busy) return;
+  clearSelection(state.selected);
   renderLibrary();
   updateSelection();
   message("已清空选择，当前图表仍显示上一次对比结果。勾选曲目后可重新生成。");
 });
+$("invert-selection").addEventListener("click", () => {
+  if (state.busy) return;
+  invertSelection(state.tracks.map(track => track.id), state.selected);
+  renderLibrary();
+});
+$("preview-transfer").addEventListener("click", previewTransfer);
 $("select-all").addEventListener("change", () => {
   toggleSelection(state.tracks.map((t) => t.id), state.selected, $("select-all").checked);
   renderLibrary();
@@ -749,7 +797,7 @@ $("transfer-form").addEventListener("submit", (event) => { event.preventDefault(
 for (const id of ["close-transfer", "cancel-transfer"]) $(id).addEventListener("click", () => $("transfer-dialog").close());
 $("transfer-dialog").addEventListener("cancel", (event) => { if (state.transferRunning) event.preventDefault(); });
 $("transfer-dialog").addEventListener("close", () => { ($("transfer-tracks").disabled ? $("search") : $("transfer-tracks")).focus(); });
-for (const id of ["transfer-target", "keep-structure", "operation-copy", "operation-move"]) $(id).addEventListener("input", updateTransferPreview);
+for (const id of ["transfer-target", "keep-structure", "operation-copy", "operation-move", "folder-mode"]) $(id).addEventListener("input", updateTransferPreview);
 $("open-settings").addEventListener("click", openSettings);
 $("settings-form").addEventListener("submit", (event) => { event.preventDefault(); saveAnalysisWorkers(); });
 for (const id of ["close-settings", "cancel-settings"]) $(id).addEventListener("click", () => $("settings-dialog").close());
@@ -758,7 +806,7 @@ $("restore-settings").addEventListener("click", () => {
   $("analysis-workers").value = String(state.defaultAnalysisWorkers);
   $("suspicious-threshold").value = "35";
 });
-$("stop-analysis").addEventListener("click", () => { state.stopRequested = true; updateSelection(); });
+$("stop-analysis").addEventListener("click", () => { state.analysisRun?.stop(); });
 $("close-report").addEventListener("click", () => $("report-dialog").close());
 $("compare").addEventListener("click", compare);
 $("mode-2d").addEventListener("click", () => setMode("2d"));

@@ -191,3 +191,15 @@ html[lang="en"] .panel-heading h2 span { display: none; }
 #transfer-root { overflow-wrap: anywhere; font-size: 12px; }
 #transfer-error, .operation-error { color: #f7a79b; }
 #transfer-status { color: var(--text); }
+
+/* Scope confirmation and request-level analysis details. */
+.list-actions { flex-wrap: wrap; }
+#analysis-details { flex-basis: 100%; min-width: 0; }
+#analysis-details summary { cursor: pointer; padding: .5rem 0; }
+#analysis-active, #transfer-preview, #transfer-results { padding-inline-start: 1.4rem; }
+.transfer-path, #transfer-root, #transfer-error { overflow-wrap: anywhere; }
+#analysis-counts, #transfer-totals { font-variant-numeric: tabular-nums; }
+#transfer-preview p { margin: .4rem 0; }
+#analysis-active { max-height: 12rem; overflow: auto; }
+#analysis-progress { flex-wrap: wrap; }
+#analysis-details:focus-visible, summary:focus-visible { outline: 2px solid var(--accent, #b8f078); outline-offset: 3px; }

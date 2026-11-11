@@ -49,7 +49,7 @@ Web 筛查综合高频截止、位深补零和高采样率低带宽特征，输�
 
 目标目录需要完整本地路径或 UNC 路径，不额外套上 `Artist` 这一层。目标文件已存在，或扁平存放产生重名时，会在执行前阻止整批操作，不覆盖文件。
 
-执行中逐首报告结果，某首失败后继续处理其他曲目。未完成副本会尝试清理，清理失败会明确提示。移动会在完整复制及元数据保存成功后删除源文件；删除失败时保留两份并报告「已复制，源文件未删除」。成功移动的曲目从当前曲库和图表移除。
+单曲模式执行中逐首报告结果，某首失败后继续处理其他曲目。未完成副本会尝试清理，清理失败会明确提示。移动会在完整复制及元数据保存成功后删除源文件；删除失败时保留两份并报告「已复制，源文件未删除」。成功移动的曲目从当前曲库和图表移除。
 
 文件整理期间无法扫描或分析。源文件自分析后发生变化时，需要重新分析。若请求中断，请核对源目录与目标目录，再决定如何处理剩余文件。
 
@@ -105,3 +105,44 @@ node --test tests/test_library_model.js tests/test_analysis_queue.js tests/test_
 ```
 
 后端入口为 [web_app.py](../web_app.py)，分析和评分分别位于 [web_analysis.py](../web_analysis.py)、[web_forensics.py](../web_forensics.py)，文件整理位于 [file_operations.py](../file_operations.py)，前端位于 [web](../web)。
+
+## 全库选择、分析详情和整父目录整理
+
+- 「取消选择 / Clear selection」清空全部扫描曲目；「反选 / Invert selection」作用于全库，包括搜索隐藏项和目录全部后代。连续反选两次恢复原选择。无选择时取消按钮禁用；空库或任务忙时两按钮禁用。
+- 「分析进度详情 / Analysis progress details」可用鼠标或键盘 Space 展开/收起，列出全部并发活跃曲目的相对路径。计数显示已处理/总数、成功、失败、未启动；已处理=成功+失败。没有单文件百分比。「停止后续分析」停止领取新曲目，等待在途请求完成；再次分析创建新一轮，计数重新开始。进程数在设置中调整。
+- 整理弹窗默认仍为单曲复制。「整父目录（递归包含全部文件）」必须显式勾选，对移动和复制均有效。以所选音频的直接父目录为单位，去重同目录，合并祖先覆盖范围，保留目录本身名称和内部结构，包括其他音频、图片、隐藏文件和子目录。扫描根目录一律阻止。
+- 输入目标后点击「预览实际范围」，核对服务端返回的绝对源→目标、影响音频数、全部文件/目录数和字节数，然后「确认并执行」。修改目标、处理方式、目录模式或结构选项会清除预览。预览后源或目标变化也会拒绝执行，须重新预览；已有目标不合并、不覆盖。
+- 按操作单元报告成功/未完成。目录复制失败保留源；完整复制并校验后才删源。删除失败明确显示源残留、目标残留及恢复清单，部分移走的音频（含未勾选）从曲库、选择、图表和缓存清除；仍留在源的曲目可继续查看。copy 不清理曲库。
+- 请求断开或服务中止时，不把请求未完成当作成功；核对源、目标及目标父目录的 `.lossless-lens-transfer-*.json` 恢复清单。先保存需要的副本，再由用户决定处理残留；不会自动覆盖或继续删除。传输中不能关闭弹窗；结束后 Escape 关闭并返回整理按钮。
+
+### 用临时曲库复现（Windows）
+
+以下仅生成新的临时测试文件，不指向真实曲库。在项目根目录 PowerShell 执行（需现有项目环境）：
+
+```powershell
+$trialRoot = Join-Path $env:TEMP ("ll-ui-trial-" + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $trialRoot | Out-Null
+@'
+import sys
+from pathlib import Path
+import numpy as np
+import soundfile as sf
+root = Path(sys.argv[1])
+for name in ['albumA/one.flac', 'albumA/two.flac', 'albumA/sub/three.flac', 'albumB/four.flac', 'root.flac']:
+    p = root / name
+    p.parent.mkdir(parents=True, exist_ok=True)
+    sf.write(p, .3*np.sin(2*np.pi*440*np.arange(44100*3)/44100), 44100, subtype='PCM_24')
+for name in ['albumA/cover.jpg', 'albumA/.hidden', 'albumA/sub/notes.txt']:
+    (root/name).write_bytes(b'fixture companion')
+(root/'bad.wav').write_bytes(b'broken audio')
+'@ | & 'C:/Users/UCUNI/anaconda3/envs/flac-forensics/python.exe' - $trialRoot
+& 'C:/Users/UCUNI/anaconda3/envs/flac-forensics/python.exe' web_app.py --folder $trialRoot --port 0 --no-browser
+```
+
+1. 打开终端输出的 127.0.0.1 URL。搜索 `one` 后反选，应勾选全库 6 项；再反选回到零。勾选目录、部分后代、反选两次，核对全选和目录部分勾选。切换中英文；空文件夹及分析中核对禁用状态。
+2. 设置 2 个分析进程，全选分析并展开详情，观察两个活跃路径；停止后等待排空，再分析，最终 6 项中 5 成功、1 坏音频失败，无遗留活跃项。
+3. 对比 albumA 两首直接子曲目以建立图表缓存；仅保留 one 的选择。测试时在设置中将阈值调为 0（这些合成音频通常无可疑评分）。打开整理，确认目录模式默认关闭。启用目录模式，目标使用试验根目录之外的新空路径，预览应为 albumA 一个单元、3 个影响音频、6 文件、2 目录。copy 后源和列表仍在，递归逐文件比较字节。
+4. 改用另一个新目标，move albumA；其未勾选音频也应从列表/图表消失。选 root.flac 启用目录模式应报扫描根错误；可另造一轮试验验证预览后新增文件或创建同名目标会阻止执行。测试后恢复正常阈值 35。
+5. 在 1440×900、390×844 检查弹窗滚动、长路径换行、错误可见性；用 Tab/Space 操作、Escape 退出弹窗。正常退出服务后只清理自己生成的试验目录和目标。
+
+开发联验另以临时服务注入 `copystat` 失败、指定源文件 `unlink` 失败和复制阶段暂停后终止进程，分别验证保源、部分移动清理、请求失败及恢复清单。这些是故障注入，不代表自然磁盘故障实测；不在产品中提供注入开关。Windows 本地真实文件系统与 Edge CDP 已验证；POSIX/UNC 实跑、二进制发布包为 unverified。截图和交互证据见管理目录 `evidence/folder-transfer-02/`，任务计划 `aad7657b-d430-4658-af4a-e241a721c221` 的 `task-doc: report`。
