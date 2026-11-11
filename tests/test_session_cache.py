@@ -97,6 +97,42 @@ class SessionCacheTests(unittest.TestCase):
                 raise RuntimeError("test exit")
         self.assertFalse(directory.exists())
 
+    def test_folder_copy_then_partial_move_clears_only_actually_removed_audio(self):
+        album = self.music / "album"
+        album.mkdir()
+        first = self.write("album/1.wav")
+        second = self.write("album/2.wav")
+        app = self.app()
+        with TestClient(app) as client:
+            tracks = self.scan(client)
+            ids = {t["name"]: t["id"] for t in tracks}
+            for track in tracks:
+                self.assertEqual(client.get(f"/api/tracks/{track['id']}").status_code, 200)
+            body = {"track_ids": [ids["1.wav"]], "operation": "copy", "folder_mode": True,
+                    "threshold": 0, "target_folder": str(self.root / "copied")}
+            preview = client.post("/api/tracks/transfer/preview", json=body).json()
+            copied = client.post("/api/tracks/transfer", json={**body, "preview_token": preview["preview_token"]}).json()
+            self.assertEqual(copied["removed_track_ids"], [])
+            self.assertEqual(len(list(app.state.session_cache.directory.glob("*.json"))), 2)
+            # Reverse deletion order deletes 2.wav before failing on 1.wav.
+            unlink = Path.unlink
+            def deny(path, *args, **kwargs):
+                if path == first:
+                    raise PermissionError("locked source")
+                return unlink(path, *args, **kwargs)
+            body.update(operation="move", target_folder=str(self.root / "moved"))
+            preview = client.post("/api/tracks/transfer/preview", json=body).json()
+            with patch.object(Path, "unlink", deny):
+                moved = client.post("/api/tracks/transfer", json={**body, "preview_token": preview["preview_token"]}).json()
+            self.assertEqual(moved["removed_track_ids"], [ids["2.wav"]])
+            self.assertEqual(moved["results"][0]["status"], "copied_not_removed")
+            self.assertTrue(first.exists())
+            self.assertFalse(second.exists())
+            self.assertFalse((app.state.session_cache.directory / f"{ids['2.wav']}.json").exists())
+            self.assertTrue((app.state.session_cache.directory / f"{ids['1.wav']}.json").exists())
+            self.assertEqual(client.get(f"/api/tracks/{ids['2.wav']}").status_code, 404)
+            self.assertEqual(client.get(f"/api/tracks/{ids['1.wav']}").status_code, 200)
+
 
 if __name__ == "__main__":
     unittest.main()

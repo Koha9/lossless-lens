@@ -11,6 +11,7 @@ import os
 import socket
 from pathlib import Path
 import threading
+import secrets
 from typing import Literal
 from urllib.parse import urlsplit
 
@@ -25,7 +26,8 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from web_analysis import build_plot_data
 from audio_formats import SUPPORTED, find_ffmpeg
 from session_cache import SessionCache
-from file_operations import plan_transfers, execute_transfers
+from file_operations import (plan_transfers, execute_transfers, plan_folders,
+                             execute_folders, inventory)
 
 BASE_DIR = Path(__file__).resolve().parent
 MAX_ANALYSIS_WORKERS = 32
@@ -46,6 +48,8 @@ class TransferRequest(BaseModel):
     operation: Literal["copy", "move"]
     keep_structure: bool = Field(default=True, strict=True)
     threshold: int = Field(default=35, strict=True, ge=0, le=100)
+    folder_mode: bool = Field(default=False, strict=True)
+    preview_token: str | None = None
 
 
 def analysis_pool(workers):
@@ -86,6 +90,7 @@ def create_app(default_folder: Path = BASE_DIR) -> FastAPI:
     library_lock = threading.Lock()
     transferring = threading.Event()
     scan_root: Path | None = None
+    previews = OrderedDict()
 
     @app.middleware("http")
     async def local_origin(request: Request, call_next):
@@ -142,14 +147,14 @@ def create_app(default_folder: Path = BASE_DIR) -> FastAPI:
                 registry.update(found)
                 cache.clear()
                 summaries.clear()
+                previews.clear()
             return {"folder": str(folder), "tracks": entries}
         except (OSError, ValueError) as exc:
             raise HTTPException(400, f"无法扫描文件夹：{exc}") from exc
         finally:
             library_lock.release()
 
-    @app.post("/api/tracks/transfer")
-    def transfer(body: TransferRequest):
+    def transfer_request(body: TransferRequest, preview=False):
         if not library_lock.acquire(blocking=False):
             raise HTTPException(409, "曲库操作进行中，请完成后重试。")
         try:
@@ -174,17 +179,54 @@ def create_app(default_folder: Path = BASE_DIR) -> FastAPI:
                         or score is None or score < body.threshold):
                     raise HTTPException(409, f"{path.name} 没有符合阈值的当前分析结果，请重新分析或调整勾选。")
                 tracks.append((track_id, path, (stat.st_size, stat.st_mtime_ns)))
-            target, plans = plan_transfers(tracks, root, body.target_folder, body.keep_structure)
-            results = execute_transfers(plans, body.operation)
-            moved = {item["id"] for item in results if item["status"] == "moved"}
+            request_key = (tuple(sorted(body.track_ids)), body.target_folder, body.operation,
+                           body.keep_structure, body.threshold, body.folder_mode, str(root))
+            confirmed = previews.get(body.preview_token)
+            if body.folder_mode and not preview and (confirmed is None or confirmed[0] != request_key):
+                raise HTTPException(409, "预览已失效，请重新预览。")
+            try:
+                if body.folder_mode:
+                    target, plans = plan_folders(tracks, root, body.target_folder, body.keep_structure, registry)
+                    units = [plan.preview() for plan in plans]
+                    signature = tuple((str(p.source), str(p.destination), p.snapshot,
+                                       tuple(p.affected_track_ids)) for p in plans)
+                else:
+                    target, plans = plan_transfers(tracks, root, body.target_folder, body.keep_structure)
+                    units = [{"source": str(p.source), "destination": str(p.destination),
+                              "selected_track_ids": [p.track_id], "affected_track_ids": [p.track_id],
+                              "file_count": 1, "directory_count": 0, "total_bytes": p.fingerprint[0]}
+                             for p in plans]
+                    signature = tuple((str(p.source), str(p.destination), inventory(p.source)) for p in plans)
+            except (OSError, ValueError) as exc:
+                if confirmed and not preview:
+                    raise HTTPException(409, f"范围或目标已变化，请重新预览：{exc}") from exc
+                raise
+            if preview:
+                token = secrets.token_urlsafe(32)
+                previews[token] = (request_key, signature)
+                while len(previews) > 64:
+                    previews.popitem(last=False)
+                return {"target_folder": str(target), "folder_mode": body.folder_mode,
+                        "preview_token": token, "units": units,
+                        "totals": {"units": len(units), "files": sum(u["file_count"] for u in units),
+                                   "directories": sum(u["directory_count"] for u in units),
+                                   "bytes": sum(u["total_bytes"] for u in units)}}
+            if body.preview_token is not None or body.folder_mode:
+                if confirmed != (request_key, signature):
+                    raise HTTPException(409, "源或目标已变化，请重新预览。")
+                previews.pop(body.preview_token, None)
+            affected = {key: registry[key] for u in units for key in u["affected_track_ids"]}
+            results = execute_folders(plans, body.operation) if body.folder_mode else execute_transfers(plans, body.operation)
+            moved = {key for key, path in affected.items() if not path.exists()} if body.operation == "move" else set()
             with lock:
                 for track_id in moved:
                     registry.pop(track_id, None)
-                for key in list(summaries):
-                    if key[0] in moved:
-                        summaries.pop(key)
-                        cache.pop(key, None)
-            return {"target_folder": str(target), "results": results}
+                for store in (summaries, cache):
+                    for key in list(store):
+                        if key[0] in moved:
+                            store.pop(key)
+                app.state.session_cache.remove_tracks(moved)
+            return {"target_folder": str(target), "results": results, "removed_track_ids": sorted(moved)}
         except FileExistsError as exc:
             raise HTTPException(409, str(exc)) from exc
         except ValueError as exc:
@@ -194,6 +236,14 @@ def create_app(default_folder: Path = BASE_DIR) -> FastAPI:
         finally:
             transferring.clear()
             library_lock.release()
+
+    @app.post("/api/tracks/transfer/preview")
+    def preview_transfer(body: TransferRequest):
+        return transfer_request(body, preview=True)
+
+    @app.post("/api/tracks/transfer")
+    def transfer(body: TransferRequest):
+        return transfer_request(body)
 
     def analyze(track_id: str, include_plots: bool):
         with lock:

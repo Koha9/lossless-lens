@@ -125,6 +125,56 @@ class WebTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "需要 FFmpeg"):
                 build_plot_data(path)
 
+    def test_folder_preview_binding_changed_scope_and_unselected_audio(self):
+        album = self.folder / "album"
+        album.mkdir()
+        for name in ("selected.flac", "other.flac"):
+            sf.write(album / name, self.tone(), 48000, subtype="PCM_24")
+        (album / ".cover").write_bytes(b"image")
+        target = self.folder / "destination"
+        with TestClient(create_app(self.folder)) as client:
+            tracks = client.post("/api/scan", json={"folder": str(self.folder)}).json()["tracks"]
+            selected = tracks[0]["id"]
+            self.assertEqual(client.get(f"/api/tracks/{selected}/analysis").status_code, 200)
+            body = {"track_ids": [selected], "operation": "move", "folder_mode": True,
+                    "target_folder": str(target), "threshold": 0}
+            self.assertEqual(client.post("/api/tracks/transfer", json=body).status_code, 409)
+            self.assertEqual(client.post("/api/tracks/transfer/preview", json={**body, "folder_mode": 1}).status_code, 422)
+            preview = client.post("/api/tracks/transfer/preview", json=body).json()
+            self.assertFalse(target.exists())
+            self.assertEqual(preview["totals"], {"units": 1, "files": 3, "directories": 1,
+                             "bytes": sum(p.stat().st_size for p in album.iterdir())})
+            self.assertEqual(set(preview["units"][0]["affected_track_ids"]), {t["id"] for t in tracks})
+            token = preview["preview_token"]
+            self.assertEqual(client.post("/api/tracks/transfer", json={**body, "operation": "copy", "preview_token": token}).status_code, 409)
+            (album / "new.jpg").write_bytes(b"changed range")
+            self.assertEqual(client.post("/api/tracks/transfer", json={**body, "preview_token": token}).status_code, 409)
+            self.assertFalse(target.exists())
+            preview = client.post("/api/tracks/transfer/preview", json=body).json()
+            result = client.post("/api/tracks/transfer", json={**body, "preview_token": preview["preview_token"]}).json()
+            self.assertEqual(result["results"][0]["destination"], preview["units"][0]["destination"])
+            self.assertEqual(result["results"][0]["status"], "moved")
+            self.assertEqual(set(result["removed_track_ids"]), {t["id"] for t in tracks})
+            for track in tracks:
+                self.assertEqual(client.get(f"/api/tracks/{track['id']}").status_code, 404)
+
+    def test_preview_rejects_scan_root_and_target_race(self):
+        self.write("root.flac", self.tone())
+        target = self.folder / "target"
+        with TestClient(create_app(self.folder)) as client:
+            tracks = client.post("/api/scan", json={"folder": str(self.folder)}).json()["tracks"]
+            selected = tracks[0]["id"]
+            client.get(f"/api/tracks/{selected}/analysis")
+            body = {"track_ids": [selected], "operation": "copy", "folder_mode": True,
+                    "target_folder": str(target), "threshold": 0}
+            self.assertEqual(client.post("/api/tracks/transfer/preview", json=body).status_code, 400)
+            body["folder_mode"] = False
+            preview = client.post("/api/tracks/transfer/preview", json=body).json()
+            target.mkdir()
+            (target / "root.flac").write_bytes(b"other writer")
+            self.assertEqual(client.post("/api/tracks/transfer", json={**body, "preview_token": preview["preview_token"]}).status_code, 409)
+            self.assertEqual((target / "root.flac").read_bytes(), b"other writer")
+
     @unittest.skipUnless(find_ffmpeg(), "FFmpeg is required for codec integration tests")
     def test_real_common_audio_codecs(self):
         source = self.write("源音频.wav", np.column_stack([self.tone(), self.tone()]))
