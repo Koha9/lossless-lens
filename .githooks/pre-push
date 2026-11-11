@@ -1,0 +1,3 @@
+#!/bin/sh
+echo "REFUSED: this project forbids all pushes; stop and report to PM." >&2
+exit 1
