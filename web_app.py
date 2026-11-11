@@ -170,7 +170,12 @@ def create_app(default_folder: Path = BASE_DIR) -> FastAPI:
             for track_id, path in paths:
                 if path is None:
                     raise HTTPException(404, "未找到曲目，请重新扫描文件夹。")
-                stat = path.stat()
+                try:
+                    stat = path.stat()
+                except (FileNotFoundError, NotADirectoryError) as exc:
+                    if body.folder_mode and not preview and body.preview_token in previews:
+                        raise HTTPException(409, "源范围已变化，预览已失效，请重新预览。") from exc
+                    raise
                 key = (track_id, stat.st_size, stat.st_mtime_ns)
                 report = summaries.get(key) or app.state.session_cache.read(key)
                 evidence = report["forensics"] if report else {}

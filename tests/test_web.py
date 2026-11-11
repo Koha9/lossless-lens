@@ -158,6 +158,41 @@ class WebTests(unittest.TestCase):
             for track in tracks:
                 self.assertEqual(client.get(f"/api/tracks/{track['id']}").status_code, 404)
 
+    def test_folder_preview_missing_or_renamed_selected_source_requires_repreview(self):
+        album = self.folder / "album"
+        album.mkdir()
+        source = album / "selected.wav"
+        (album / "cover.jpg").write_bytes(b"keep cover")
+        target = self.folder / "target"
+        with TestClient(create_app(self.folder)) as client:
+            for operation in ("copy", "move"):
+                for change in ("delete", "rename"):
+                    with self.subTest(operation=operation, change=change):
+                        sf.write(source, self.tone(), 48000, subtype="PCM_24")
+                        tracks = client.post("/api/scan", json={"folder": str(self.folder)}).json()["tracks"]
+                        selected = next(t["id"] for t in tracks if t["name"] == source.name)
+                        self.assertEqual(client.get(f"/api/tracks/{selected}/analysis").status_code, 200)
+                        body = {"track_ids": [selected], "operation": operation, "folder_mode": True,
+                                "target_folder": str(target), "threshold": 0}
+                        preview = client.post("/api/tracks/transfer/preview", json=body)
+                        self.assertEqual(preview.status_code, 200)
+                        self.assertFalse(target.exists())
+                        if change == "delete":
+                            source.unlink()
+                        else:
+                            source.rename(album / "renamed.wav")
+                        before = {str(p.relative_to(self.folder)): p.read_bytes()
+                                  for p in self.folder.rglob("*") if p.is_file()}
+                        response = client.post("/api/tracks/transfer", json={
+                            **body, "preview_token": preview.json()["preview_token"]})
+                        self.assertEqual(response.status_code, 409)
+                        self.assertIn("重新预览", response.json()["detail"])
+                        self.assertFalse(target.exists())
+                        self.assertEqual({str(p.relative_to(self.folder)): p.read_bytes()
+                                          for p in self.folder.rglob("*") if p.is_file()}, before)
+                        if change == "rename":
+                            (album / "renamed.wav").unlink()
+
     def test_preview_rejects_scan_root_and_target_race(self):
         self.write("root.flac", self.tone())
         target = self.folder / "target"
