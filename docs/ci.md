@@ -13,7 +13,7 @@ CI 不设置路径过滤，文档或工作流修改也会产生检查结果。�
 ## 检查组成
 
 1. Windows 与 Ubuntu，Python 3.12、Node.js 24：显式安装并检查 FFmpeg/ffprobe，避免真实编解码测试因工具缺失被跳过；安装 `requirements-dev.txt`，运行未裁剪的 `scripts/project_check.py`。覆盖语法、差异、全部 Python/JavaScript 测试，以及临时 FLAC 的扫描、分析、静态资源和生命周期冒烟。
-2. 两个平台检查都通过后，在 Windows 构建 ZIP。`build_onedir.ps1 -Zip` 已包含打包后 `LosslessLens.exe --help` 的真实启动检查。
+2. 两个平台检查都通过后，在 Windows 构建 ZIP。`build_onedir.ps1 -Zip` 已包含打包后 `LosslessLens.exe --help` 的真实启动检查。冻结解释器启用 UTF-8，中文帮助输出到管道时不依赖 runner 的默认 ANSI 编码。
 3. 保存 `LosslessLens-windows-x64` artifact 14 天，PR 也可下载试用。缺少 ZIP 会令任务失败。
 4. 只有标签推送的 Release 发布任务拥有 `contents: write`；它下载本次已验证产物，不重复构建。普通 CI 和手动发布检查只有读权限，不会自动合并 PR。
 
