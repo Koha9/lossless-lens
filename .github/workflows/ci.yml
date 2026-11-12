@@ -41,6 +41,22 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
+      - name: Install FFmpeg (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ffmpeg
+          ffmpeg -version
+          ffprobe -version
+      - name: Install FFmpeg (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install ffmpeg --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ffmpeg -version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ffprobe -version
       - name: Install test dependencies
         run: python -m pip install -r requirements-dev.txt
       - name: Protect the disposable CI checkout
