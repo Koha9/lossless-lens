@@ -306,22 +306,50 @@ class TransferApiTests(unittest.TestCase):
             self.assertEqual((self.root / "moved/1.flac").read_bytes(), original)
             self.assertEqual(client.get(f"/api/tracks/{body['track_ids'][0]}").status_code, 404)
 
-    def test_threshold_unanalyzed_changed_files_and_conflicts_block_writes(self):
+    def test_unanalyzed_and_changed_analysis_sources_ignore_legal_thresholds(self):
         with TestClient(self.app) as client:
             body = self.prepare(client, analyze=False)
-            self.assertEqual(client.post("/api/tracks/transfer", json=body).status_code, 409)
-            client.get(f"/api/tracks/{body['track_ids'][0]}/analysis")
-            self.assertEqual(client.post("/api/tracks/transfer", json={**body, "threshold": 100}).status_code, 409)
-            self.assertFalse((self.root / "target").exists())
-            (self.root / "target/A/B").mkdir(parents=True)
-            target = self.root / "target/A/B/1.flac"
-            target.write_bytes(b"existing")
-            self.assertEqual(client.post("/api/tracks/transfer", json=body).status_code, 409)
-            self.assertEqual(target.read_bytes(), b"existing")
+            for threshold in (0, 35, 100):
+                target = self.root / f"unanalysed-{threshold}"
+                response = client.post("/api/tracks/transfer", json={**body, "threshold": threshold, "target_folder": str(target)})
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual((target / "A/B/1.flac").read_bytes(), self.source.read_bytes())
+                self.assertTrue(self.source.exists())
+            self.assertEqual(client.get(f"/api/tracks/{body['track_ids'][0]}/analysis").status_code, 200)
             with self.source.open("ab") as stream:
-                stream.write(b"changed")
-            self.assertEqual(client.post("/api/tracks/transfer", json={**body, "target_folder": str(self.root / "new")}).status_code, 409)
-            self.assertFalse((self.root / "new").exists())
+                stream.write(b"changed since analysis")
+            response = client.post("/api/tracks/transfer", json={**body, "threshold": 100})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual((self.root / "target/A/B/1.flac").read_bytes(), self.source.read_bytes())
+
+    def test_destination_conflict_never_overwrites_or_changes_source(self):
+        with TestClient(self.app) as client:
+            body = self.prepare(client, analyze=False)
+            original = self.source.read_bytes()
+            target = self.root / "target/A/B/1.flac"
+            target.parent.mkdir(parents=True)
+            target.write_bytes(b"existing")
+            for operation in ("copy", "move"):
+                response = client.post("/api/tracks/transfer", json={**body, "operation": operation})
+                self.assertEqual(response.status_code, 409)
+                self.assertEqual(target.read_bytes(), b"existing")
+                self.assertEqual(self.source.read_bytes(), original)
+
+    def test_changed_source_after_preview_requires_repreview(self):
+        with TestClient(self.app) as client:
+            body = self.prepare(client, analyze=False)
+            for operation in ("copy", "move"):
+                request = {**body, "operation": operation}
+                preview = client.post("/api/tracks/transfer/preview", json=request)
+                self.assertEqual(preview.status_code, 200, preview.text)
+                with self.source.open("ab") as stream:
+                    stream.write(b"changed after preview")
+                changed = self.source.read_bytes()
+                response = client.post("/api/tracks/transfer", json={**request, "preview_token": preview.json()["preview_token"]})
+                self.assertEqual(response.status_code, 409)
+                self.assertIn("重新预览", response.json()["detail"])
+                self.assertEqual(self.source.read_bytes(), changed)
+                self.assertFalse((self.root / "target").exists())
 
     def test_transfer_excludes_scan_analysis_and_other_transfers(self):
         started, release = threading.Event(), threading.Event()
@@ -346,7 +374,7 @@ class TransferApiTests(unittest.TestCase):
     def test_invalid_requests_and_unknown_tracks(self):
         with TestClient(self.app) as client:
             body = self.prepare(client, analyze=False)
-            for change in ({"threshold": -1}, {"threshold": 101}, {"threshold": 2.5}, {"operation": "delete"}, {"track_ids": []}):
+            for change in ({"threshold": -1}, {"threshold": 101}, {"threshold": 2.5}, {"threshold": True}, {"threshold": "35"}, {"operation": "delete"}, {"track_ids": []}):
                 self.assertEqual(client.post("/api/tracks/transfer", json={**body, **change}).status_code, 422)
             self.assertEqual(client.post("/api/tracks/transfer", json={**body, "track_ids": ["missing"]}).status_code, 404)
 

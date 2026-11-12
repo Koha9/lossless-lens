@@ -6,6 +6,10 @@ const LensI18n = (() => {
   let originalTitle = "";
   const english = {
     "已复制，部分源残留": "Copied; some sources remain",
+    "全库选择与整理": "Library selection and transfers",
+    "勾选曲目": "Track selection", "全库全选": "Select entire library", "清空勾选": "Clear selection", "全库反选": "Invert entire library",
+    "选择操作覆盖全库，包含搜索隐藏项。": "Selection applies to the entire library, including hidden search results.",
+    "当前任务进行中，完成后可预览并执行整理。可先填写目标和处理方式。": "A task is running. Preview and transfer will be available when it finishes. You can set the destination and operation now.",
     "取消选择": "Clear selection",
     "反选": "Invert selection",
     "分析进度详情": "Analysis progress details",
@@ -90,11 +94,11 @@ const LensI18n = (() => {
     "歌曲分析": "Track analysis", "同时处理多首歌曲，减少批量分析的等待时间。": "Analyze several tracks at once to reduce batch processing time.",
     "分析进程数": "Analysis processes", "1 为串行处理。更多进程会增加 CPU、内存与临时磁盘占用，数量越大不一定越快；单首歌曲的分析方法保持一致。": "1 runs serially. More processes use more CPU, memory and temporary disk space; a higher count is not always faster. Each track uses the same analysis method.",
     "可疑曲目勾选阈值": "Suspicious selection threshold",
-    "默认 35 分，选择评分大于或等于此值的已分析曲目。只影响一键勾选与移动／复制范围，不改变分析评分、颜色或判断依据。": "Default: 35. Select analyzed tracks at or above this score. This affects selection and transfers only, not scores, colors or evidence.",
+    "默认 35 分，选择评分大于或等于此值的已分析曲目。只影响「勾选可疑」，不限制移动／复制范围，不改变分析评分、颜色或判断依据。": "Default: 35. Select analyzed tracks at or above this score. This only affects Select suspicious, without restricting transfers or changing scores, colors or evidence.",
     "恢复默认值": "Restore defaults", "取消": "Cancel", "保存设置": "Save settings", "正在保存…": "Saving…",
     "正在保存设置…": "Saving settings…", "当前任务进行中，完成后可调整进程数。": "A task is running. Settings can be changed when it finishes.",
     "保存后对后续分析生效。此偏好保存在当前浏览器。": "Saved settings apply to subsequent work and are remembered in this browser.",
-    "移动／复制可疑曲目": "Move / copy suspicious tracks", "处理方式": "Operation", "复制": "Copy", "移动": "Move",
+    "移动／复制勾选曲目": "Move / copy selected tracks", "处理方式": "Operation", "复制": "Copy", "移动": "Move",
     "目标目录": "Destination", "目标文件夹（完整路径或 UNC 路径）": "Destination folder (absolute or UNC path)",
     "D:\\可疑曲目 或 \\\\NAS\\share\\可疑曲目": "D:\\Review or \\\\NAS\\share\\Review",
     "保持原有目录结构": "Preserve folder structure", "目标路径预览": "Destination preview", "文件操作结果": "Transfer results",
@@ -137,6 +141,9 @@ const LensI18n = (() => {
     "源文件在处理过程中发生变化，已保留源文件，请重新分析。": "The source changed during the transfer and was kept. Analyze it again."
   };
   const patterns = [
+    [/^已选 (\d+) \/ (\d+) 首$/, (_, n, all) => `${n} / ${all} selected`],
+    [/^整理勾选(?: · (\d+) 首)?$/, (_, n) => `Move / copy${n ? ` · ${n}` : ""}`],
+    [/^本次处理全部 (\d+) 首勾选曲目（含搜索隐藏项），无需分析或达到评分阈值。$/, (_, n) => `Process all ${n} selected tracks, including hidden search results. No analysis or minimum score required.`],
     [/^(源残留|目标残留)：(.+)$/, (_, label, path) => `${label === "源残留" ? "Remaining sources" : "Residual destinations"}: ${path}`],
     [/^(.+)；恢复清单：(.+)$/, (_, error, path) => `${translate(error)}; Recovery manifest: ${path}`],
 

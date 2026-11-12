@@ -123,6 +123,7 @@ function setBusy(value) {
   $("mode-3d").disabled = value;
   $("interface-language").disabled = value;
   updateSettingsControls();
+  updateTransferControls();
   updateSelection();
   renderLibrary();
 }
@@ -130,13 +131,13 @@ function updateSelection() {
   $("clear-selection").disabled = state.busy || !state.selected.size;
   $("invert-selection").disabled = state.busy || !state.tracks.length;
   const matches = suspiciousTracks();
-  const selectedMatches = matches.filter((track) => state.selected.has(track.id));
+  const selectedTracks = state.tracks.filter((track) => state.selected.has(track.id));
   $("select-suspicious").disabled = state.busy || !matches.length;
   setText($("select-suspicious"), `勾选可疑 · ≥ ${state.suspiciousThreshold} 分`);
-  $("transfer-tracks").disabled = state.busy || !selectedMatches.length;
-  setText($("transfer-tracks"), `移动／复制${selectedMatches.length ? ` · ${selectedMatches.length} 首` : ""}`);
+  $("transfer-tracks").disabled = !selectedTracks.length;
+  setText($("transfer-tracks"), `整理勾选${selectedTracks.length ? ` · ${selectedTracks.length} 首` : ""}`);
   const max = state.mode === "2d" ? 4 : 8;
-  setText($("selection-count"), `已选 ${state.selected.size} 首`);
+  setText($("selection-count"), `已选 ${selectedTracks.length} / ${state.tracks.length} 首`);
   setText($("selection-help"), `批量分析不限数量 · ${state.mode.toUpperCase()} 对比最多 ${max} 首`);
   $("compare").disabled = state.busy || !state.selected.size || state.selected.size > max;
   setText($("compare"), `生成对比${state.selected.size ? ` · ${state.selected.size} 首` : ""} ↗`);
@@ -182,8 +183,9 @@ function updateTransferControls() {
   for (const node of $("transfer-form").querySelectorAll("input, button")) {
     node.disabled = state.transferRunning || (state.transferDone && node.tagName === "INPUT");
   }
-  $("preview-transfer").disabled = state.transferRunning || state.transferDone || !$("transfer-target").value.trim();
-  $("execute-transfer").disabled = state.transferRunning || state.transferDone || !state.transferPreview;
+  $("transfer-busy").hidden = !state.busy || state.transferRunning;
+  $("preview-transfer").disabled = state.busy || state.transferRunning || state.transferDone || !$("transfer-target").value.trim();
+  $("execute-transfer").disabled = state.busy || state.transferRunning || state.transferDone || !state.transferPreview;
 }
 function updateTransferPreview() {
   state.transferPreview = null;
@@ -192,7 +194,7 @@ function updateTransferPreview() {
   $("transfer-error").hidden = true;
   setText($("transfer-status"), "");
   setText($("execute-transfer"), "确认并执行");
-  setText($("transfer-summary"), `本次处理已勾选且评分 ≥ ${state.suspiciousThreshold} 分的 ${state.transferTracks.length} 首曲目。`);
+  setText($("transfer-summary"), `本次处理全部 ${state.transferTracks.length} 首勾选曲目（含搜索隐藏项），无需分析或达到评分阈值。`);
   setText($("transfer-root"), `相对路径根目录：${state.folder}（目标路径不包含该根目录的名称）`);
   setText($("transfer-mode-help"), $("folder-mode").checked
     ? "整目录递归包含其他音频、图片、隐藏文件和子目录；完整复制后才删除源。扫描根目录不可整理。"
@@ -200,7 +202,7 @@ function updateTransferPreview() {
   updateTransferControls();
 }
 async function previewTransfer() {
-  if (state.busy || state.transferDone) return;
+  if (state.busy || state.transferRunning || state.transferDone) return;
   state.transferRunning = true;
   state.transferPreview = null;
   setBusy(true);
@@ -229,8 +231,8 @@ async function previewTransfer() {
   }
 }
 function openTransfer() {
-  if (state.busy) return;
-  state.transferTracks = suspiciousTracks().filter((track) => state.selected.has(track.id));
+  if (state.transferRunning || $("transfer-dialog").open) return;
+  state.transferTracks = state.tracks.filter((track) => state.selected.has(track.id));
   if (!state.transferTracks.length) return;
   state.transferDone = false;
   $("folder-mode").checked = false;
@@ -244,7 +246,7 @@ function openTransfer() {
   $("transfer-dialog").showModal();
 }
 async function executeTransfer() {
-  if (state.busy || state.transferDone || !state.transferPreview) return;
+  if (state.busy || state.transferRunning || state.transferDone || !state.transferPreview) return;
   const {body: confirmed, preview} = state.transferPreview;
   if (JSON.stringify(confirmed) !== JSON.stringify(transferBody())) { updateTransferPreview(); return; }
   const body = {...confirmed, preview_token: preview.preview_token};

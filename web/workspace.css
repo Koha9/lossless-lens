@@ -203,3 +203,21 @@ html[lang="en"] .panel-heading h2 span { display: none; }
 #analysis-active { max-height: 12rem; overflow: auto; }
 #analysis-progress { flex-wrap: wrap; }
 #analysis-details:focus-visible, summary:focus-visible { outline: 2px solid var(--accent, #b8f078); outline-offset: 3px; }
+
+/* Whole-library selection stays separate from directory navigation. */
+.library-selection { margin: 10px 0 8px; padding: 10px 0 4px; border-block: 1px solid var(--border); }
+.selection-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; font-size: 12px; }
+#selection-count { color: var(--accent); font-variant-numeric: tabular-nums; }
+.library-selection .list-actions { display: flex; gap: 14px; margin: 6px 0 2px; }
+.library-selection .text-button, .library-selection .select-all-label { min-height: 32px; font-size: 12px; }
+#selection-scope { color: var(--muted); font-size: 11px; line-height: 1.5; margin: 0 0 6px; }
+.library-selection .suspicious-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 2px 0 6px; }
+.library-selection .suspicious-actions button { min-width: 0; min-height: 34px; padding: 6px; font-size: 12px; }
+#transfer-tracks { color: var(--accent); border-color: #566b43; }
+#transfer-tracks:disabled { color: var(--muted); border-color: var(--border); }
+#transfer-busy { padding: 10px; background: #263127; color: var(--text); }
+.library-selection :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+@media (max-width: 420px) {
+  .library-selection .list-actions { gap: 10px; }
+  .library-selection .suspicious-actions { grid-template-columns: 1fr; }
+}

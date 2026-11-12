@@ -47,6 +47,8 @@ test("localization preserves filenames, dollar signs and numeric values", () => 
 
 test("scope confirmation, lifecycle counts and recovery paths localize in both languages", () => {
   for (const source of [
+    "已选 2 / 5 首", "整理勾选 · 2 首", "整理勾选",
+    "本次处理全部 2 首勾选曲目（含搜索隐藏项），无需分析或达到评分阈值。",
     "取消选择", "反选", "分析进度详情", "确认并执行",
     "分析中 · 已处理 2 / 6 · 成功 1 · 失败 1 · 未启动 2",
     "停止中（等待在途请求） · 已处理 2 / 6 · 成功 1 · 失败 1 · 未启动 2",

@@ -29,10 +29,14 @@
       </form>
       <label class="search-field"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="搜索曲名或文件夹…" aria-label="搜索曲目"></label>
       <div class="library-views"><div class="library-switch" role="group" aria-label="曲库显示方式"><button id="view-tree" type="button" class="active" aria-pressed="true">目录树</button><button id="view-list" type="button" aria-pressed="false">列表</button></div><div id="tree-actions"><button id="expand-folders" class="text-button" type="button">展开</button><span aria-hidden="true"> / </span><button id="collapse-folders" class="text-button" type="button">折叠</button></div></div>
-      <div class="list-actions"><label class="select-all-label"><input id="select-all" type="checkbox">全部文件</label><span id="selection-count">已选 0 首</span><button id="clear-selection" class="text-button" type="button">取消选择</button><button id="invert-selection" class="text-button" type="button">反选</button></div>
+      <section class="library-selection" aria-label="全库选择与整理">
+        <div class="selection-heading"><strong>勾选曲目</strong><span id="selection-count" role="status">已选 0 / 0 首</span></div>
+        <div class="list-actions"><label class="select-all-label"><input id="select-all" type="checkbox" aria-describedby="selection-scope">全库全选</label><button id="clear-selection" class="text-button" type="button">清空勾选</button><button id="invert-selection" class="text-button" type="button">全库反选</button></div>
+        <p id="selection-scope">选择操作覆盖全库，包含搜索隐藏项。</p>
+        <div class="suspicious-actions"><button id="select-suspicious" class="secondary-button" type="button" title="按已分析结果替换当前勾选，包含搜索隐藏项" disabled>勾选可疑 · ≥ 35 分</button><button id="transfer-tracks" class="secondary-button" type="button" aria-haspopup="dialog" disabled>整理勾选</button></div>
+      </section>
       <div class="result-key" aria-label="分析颜色图例"><span>灰：未分析</span><span class="risk-gradient"></span><span>绿：低 → 红：高</span></div>
       <p class="score-help">特征评分 0–100，非真伪概率。文件夹勾选包含全部子文件。</p>
-      <div class="suspicious-actions"><button id="select-suspicious" class="secondary-button" type="button" title="按已分析结果替换当前勾选，包含搜索隐藏项" disabled>勾选可疑 · ≥ 35 分</button><button id="transfer-tracks" class="secondary-button" type="button" disabled>移动／复制</button></div>
       <div id="track-list" class="track-list"><p class="library-empty">扫描文件夹后，在这里勾选曲目。</p></div>
       <div class="library-footer"><button id="analyze-selected" class="primary-button" disabled>分析所选</button><button id="stop-analysis" class="secondary-button" hidden>停止后续分析</button><button id="compare" class="secondary-button compare-button" disabled>生成对比 <span aria-hidden="true">↗</span></button><p id="selection-help">批量分析不限数量 · 2D 对比最多 4 首</p></div>
     </aside>
@@ -70,7 +74,7 @@
         <p id="analysis-workers-help">1 为串行处理。更多进程会增加 CPU、内存与临时磁盘占用，数量越大不一定越快；单首歌曲的分析方法保持一致。</p>
         <label for="suspicious-threshold">可疑曲目勾选阈值</label>
         <input id="suspicious-threshold" type="number" min="0" max="100" step="1" inputmode="numeric" required aria-describedby="suspicious-threshold-help" disabled>
-        <p id="suspicious-threshold-help">默认 35 分，选择评分大于或等于此值的已分析曲目。只影响一键勾选与移动／复制范围，不改变分析评分、颜色或判断依据。</p>
+        <p id="suspicious-threshold-help">默认 35 分，选择评分大于或等于此值的已分析曲目。只影响「勾选可疑」，不限制移动／复制范围，不改变分析评分、颜色或判断依据。</p>
         <p id="settings-note" role="status"></p>
         <p id="settings-error" role="alert" hidden></p>
       </div>
@@ -79,9 +83,10 @@
   </dialog>
   <dialog id="transfer-dialog" aria-labelledby="transfer-title">
     <form id="transfer-form">
-      <div class="export-heading"><h2 id="transfer-title">移动／复制可疑曲目</h2><button id="close-transfer" class="secondary-button" type="button">关闭</button></div>
+      <div class="export-heading"><h2 id="transfer-title">移动／复制勾选曲目</h2><button id="close-transfer" class="secondary-button" type="button">关闭</button></div>
       <div class="settings-content transfer-content">
         <p id="transfer-summary"></p>
+        <p id="transfer-busy" role="status" hidden>当前任务进行中，完成后可预览并执行整理。可先填写目标和处理方式。</p>
         <fieldset><legend>处理方式</legend><label><input id="operation-copy" name="transfer-operation" type="radio" value="copy" checked>复制</label><label><input id="operation-move" name="transfer-operation" type="radio" value="move">移动</label></fieldset>
         <label class="keep-structure"><input id="folder-mode" type="checkbox">整父目录（递归包含全部文件）</label><p id="transfer-mode-help"></p>
         <label for="transfer-target">目标文件夹（完整路径或 UNC 路径）</label>

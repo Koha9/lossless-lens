@@ -210,6 +210,62 @@ class WebTests(unittest.TestCase):
             self.assertEqual(client.post("/api/tracks/transfer", json={**body, "preview_token": preview["preview_token"]}).status_code, 409)
             self.assertEqual((target / "root.flac").read_bytes(), b"other writer")
 
+    def test_all_selected_transfer_modes_ignore_analysis_and_threshold(self):
+        # Real filesystem operations, including an undecodable selected file,
+        # low/high scores, no report, and an unselected directory descendant.
+        for folder_mode in (False, True):
+            for operation in ("copy", "move"):
+                with self.subTest(folder_mode=folder_mode, operation=operation):
+                    root = self.folder / f"source-{folder_mode}-{operation}"
+                    album = root / "album"
+                    album.mkdir(parents=True)
+                    for name in ("unanalysed", "low", "high", "other"):
+                        sf.write(album / f"{name}.wav", self.tone(), 48000)
+                    (album / "failed.flac").write_bytes(b"not decodable, still transferable")
+                    (album / ".cover").write_bytes(b"cover")
+                    target = self.folder / f"target-{folder_mode}-{operation}"
+                    app = create_app(root)
+                    with TestClient(app) as client:
+                        tracks = client.post("/api/scan", json={"folder": str(root)}).json()["tracks"]
+                        ids = {t["name"]: t["id"] for t in tracks}
+                        self.assertEqual(client.get(f"/api/tracks/{ids['failed.flac']}/analysis").status_code, 422)
+                        for name, score in (("low.wav", 0), ("high.wav", 95)):
+                            path = album / name
+                            stat = path.stat()
+                            report = {k: {} for k in ("info", "summary", "spectrum", "spectrogram", "analysis")}
+                            report["forensics"] = {"status": "clear" if score == 0 else "suspicious", "score": score}
+                            app.state.session_cache.write((ids[name], stat.st_size, stat.st_mtime_ns), report)
+                        chosen = [v for k, v in ids.items() if k != "other.wav"]
+                        body = {"track_ids": chosen, "operation": operation, "folder_mode": folder_mode,
+                                "target_folder": str(target), "threshold": 100}
+                        for invalid in (-1, 101, True, "35"):
+                            self.assertEqual(client.post("/api/tracks/transfer/preview", json={**body, "threshold": invalid}).status_code, 422)
+                        self.assertEqual(client.post("/api/tracks/transfer/preview", json={**body, "track_ids": []}).status_code, 422)
+                        self.assertEqual(client.post("/api/tracks/transfer/preview", json={**body, "track_ids": ["unknown"]}).status_code, 404)
+                        preview = client.post("/api/tracks/transfer/preview", json=body)
+                        self.assertEqual(preview.status_code, 200, preview.text)
+                        units = preview.json()["units"]
+                        self.assertEqual(set(t for u in units for t in u["selected_track_ids"]), set(chosen))
+                        before = {p: p.read_bytes() for p in album.iterdir()}
+                        result = client.post("/api/tracks/transfer", json={**body, "threshold": 0,
+                                             "preview_token": preview.json()["preview_token"]})
+                        self.assertEqual(result.status_code, 200, result.text)
+                        affected = set(ids.values()) if folder_mode else set(chosen)
+                        self.assertEqual(set(result.json()["removed_track_ids"]), affected if operation == "move" else set())
+                        for source, content in before.items():
+                            included = folder_mode or ids.get(source.name) in chosen
+                            destination = target / "album" / source.name
+                            self.assertEqual(source.exists(), not (operation == "move" and included))
+                            if included:
+                                self.assertEqual(destination.read_bytes(), content)
+                        for name, track_id in ids.items():
+                            removed = operation == "move" and track_id in affected
+                            if removed:
+                                self.assertEqual(client.get(f"/api/tracks/{track_id}").status_code, 404)
+                                self.assertFalse((app.state.session_cache.directory / f"{track_id}.json").exists())
+                        self.assertEqual(len([p for p in root.rglob("*") if p.suffix in (".wav", ".flac")]),
+                                         len(tracks) - (len(affected) if operation == "move" else 0))
+
     @unittest.skipUnless(find_ffmpeg(), "FFmpeg is required for codec integration tests")
     def test_real_common_audio_codecs(self):
         source = self.write("源音频.wav", np.column_stack([self.tone(), self.tone()]))

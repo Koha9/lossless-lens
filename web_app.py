@@ -47,6 +47,7 @@ class TransferRequest(BaseModel):
     target_folder: str = Field(min_length=1, max_length=4096)
     operation: Literal["copy", "move"]
     keep_structure: bool = Field(default=True, strict=True)
+    # Compatibility only: selection thresholds do not restrict file operations.
     threshold: int = Field(default=35, strict=True, ge=0, le=100)
     folder_mode: bool = Field(default=False, strict=True)
     preview_token: str | None = None
@@ -176,16 +177,9 @@ def create_app(default_folder: Path = BASE_DIR) -> FastAPI:
                     if body.folder_mode and not preview and body.preview_token in previews:
                         raise HTTPException(409, "源范围已变化，预览已失效，请重新预览。") from exc
                     raise
-                key = (track_id, stat.st_size, stat.st_mtime_ns)
-                report = summaries.get(key) or app.state.session_cache.read(key)
-                evidence = report["forensics"] if report else {}
-                score = evidence.get("score")
-                if (evidence.get("status") not in {"clear", "suspicious"}
-                        or score is None or score < body.threshold):
-                    raise HTTPException(409, f"{path.name} 没有符合阈值的当前分析结果，请重新分析或调整勾选。")
                 tracks.append((track_id, path, (stat.st_size, stat.st_mtime_ns)))
             request_key = (tuple(sorted(body.track_ids)), body.target_folder, body.operation,
-                           body.keep_structure, body.threshold, body.folder_mode, str(root))
+                           body.keep_structure, body.folder_mode, str(root))
             confirmed = previews.get(body.preview_token)
             if body.folder_mode and not preview and (confirmed is None or confirmed[0] != request_key):
                 raise HTTPException(409, "预览已失效，请重新预览。")
