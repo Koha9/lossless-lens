@@ -36,3 +36,8 @@ class SessionCache:
 
     def close(self):
         self._temp.cleanup()
+
+    def remove_tracks(self, track_ids):
+        for track_id in track_ids:
+            (self.directory / f"{track_id}.json").unlink(missing_ok=True)
+            (self.directory / f"{track_id}.tmp").unlink(missing_ok=True)

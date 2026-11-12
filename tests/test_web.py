@@ -125,6 +125,147 @@ class WebTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "需要 FFmpeg"):
                 build_plot_data(path)
 
+    def test_folder_preview_binding_changed_scope_and_unselected_audio(self):
+        album = self.folder / "album"
+        album.mkdir()
+        for name in ("selected.flac", "other.flac"):
+            sf.write(album / name, self.tone(), 48000, subtype="PCM_24")
+        (album / ".cover").write_bytes(b"image")
+        target = self.folder / "destination"
+        with TestClient(create_app(self.folder)) as client:
+            tracks = client.post("/api/scan", json={"folder": str(self.folder)}).json()["tracks"]
+            selected = tracks[0]["id"]
+            self.assertEqual(client.get(f"/api/tracks/{selected}/analysis").status_code, 200)
+            body = {"track_ids": [selected], "operation": "move", "folder_mode": True,
+                    "target_folder": str(target), "threshold": 0}
+            self.assertEqual(client.post("/api/tracks/transfer", json=body).status_code, 409)
+            self.assertEqual(client.post("/api/tracks/transfer/preview", json={**body, "folder_mode": 1}).status_code, 422)
+            preview = client.post("/api/tracks/transfer/preview", json=body).json()
+            self.assertFalse(target.exists())
+            self.assertEqual(preview["totals"], {"units": 1, "files": 3, "directories": 1,
+                             "bytes": sum(p.stat().st_size for p in album.iterdir())})
+            self.assertEqual(set(preview["units"][0]["affected_track_ids"]), {t["id"] for t in tracks})
+            token = preview["preview_token"]
+            self.assertEqual(client.post("/api/tracks/transfer", json={**body, "operation": "copy", "preview_token": token}).status_code, 409)
+            (album / "new.jpg").write_bytes(b"changed range")
+            self.assertEqual(client.post("/api/tracks/transfer", json={**body, "preview_token": token}).status_code, 409)
+            self.assertFalse(target.exists())
+            preview = client.post("/api/tracks/transfer/preview", json=body).json()
+            result = client.post("/api/tracks/transfer", json={**body, "preview_token": preview["preview_token"]}).json()
+            self.assertEqual(result["results"][0]["destination"], preview["units"][0]["destination"])
+            self.assertEqual(result["results"][0]["status"], "moved")
+            self.assertEqual(set(result["removed_track_ids"]), {t["id"] for t in tracks})
+            for track in tracks:
+                self.assertEqual(client.get(f"/api/tracks/{track['id']}").status_code, 404)
+
+    def test_folder_preview_missing_or_renamed_selected_source_requires_repreview(self):
+        album = self.folder / "album"
+        album.mkdir()
+        source = album / "selected.wav"
+        (album / "cover.jpg").write_bytes(b"keep cover")
+        target = self.folder / "target"
+        with TestClient(create_app(self.folder)) as client:
+            for operation in ("copy", "move"):
+                for change in ("delete", "rename"):
+                    with self.subTest(operation=operation, change=change):
+                        sf.write(source, self.tone(), 48000, subtype="PCM_24")
+                        tracks = client.post("/api/scan", json={"folder": str(self.folder)}).json()["tracks"]
+                        selected = next(t["id"] for t in tracks if t["name"] == source.name)
+                        self.assertEqual(client.get(f"/api/tracks/{selected}/analysis").status_code, 200)
+                        body = {"track_ids": [selected], "operation": operation, "folder_mode": True,
+                                "target_folder": str(target), "threshold": 0}
+                        preview = client.post("/api/tracks/transfer/preview", json=body)
+                        self.assertEqual(preview.status_code, 200)
+                        self.assertFalse(target.exists())
+                        if change == "delete":
+                            source.unlink()
+                        else:
+                            source.rename(album / "renamed.wav")
+                        before = {str(p.relative_to(self.folder)): p.read_bytes()
+                                  for p in self.folder.rglob("*") if p.is_file()}
+                        response = client.post("/api/tracks/transfer", json={
+                            **body, "preview_token": preview.json()["preview_token"]})
+                        self.assertEqual(response.status_code, 409)
+                        self.assertIn("重新预览", response.json()["detail"])
+                        self.assertFalse(target.exists())
+                        self.assertEqual({str(p.relative_to(self.folder)): p.read_bytes()
+                                          for p in self.folder.rglob("*") if p.is_file()}, before)
+                        if change == "rename":
+                            (album / "renamed.wav").unlink()
+
+    def test_preview_rejects_scan_root_and_target_race(self):
+        self.write("root.flac", self.tone())
+        target = self.folder / "target"
+        with TestClient(create_app(self.folder)) as client:
+            tracks = client.post("/api/scan", json={"folder": str(self.folder)}).json()["tracks"]
+            selected = tracks[0]["id"]
+            client.get(f"/api/tracks/{selected}/analysis")
+            body = {"track_ids": [selected], "operation": "copy", "folder_mode": True,
+                    "target_folder": str(target), "threshold": 0}
+            self.assertEqual(client.post("/api/tracks/transfer/preview", json=body).status_code, 400)
+            body["folder_mode"] = False
+            preview = client.post("/api/tracks/transfer/preview", json=body).json()
+            target.mkdir()
+            (target / "root.flac").write_bytes(b"other writer")
+            self.assertEqual(client.post("/api/tracks/transfer", json={**body, "preview_token": preview["preview_token"]}).status_code, 409)
+            self.assertEqual((target / "root.flac").read_bytes(), b"other writer")
+
+    def test_all_selected_transfer_modes_ignore_analysis_and_threshold(self):
+        # Real filesystem operations, including an undecodable selected file,
+        # low/high scores, no report, and an unselected directory descendant.
+        for folder_mode in (False, True):
+            for operation in ("copy", "move"):
+                with self.subTest(folder_mode=folder_mode, operation=operation):
+                    root = self.folder / f"source-{folder_mode}-{operation}"
+                    album = root / "album"
+                    album.mkdir(parents=True)
+                    for name in ("unanalysed", "low", "high", "other"):
+                        sf.write(album / f"{name}.wav", self.tone(), 48000)
+                    (album / "failed.flac").write_bytes(b"not decodable, still transferable")
+                    (album / ".cover").write_bytes(b"cover")
+                    target = self.folder / f"target-{folder_mode}-{operation}"
+                    app = create_app(root)
+                    with TestClient(app) as client:
+                        tracks = client.post("/api/scan", json={"folder": str(root)}).json()["tracks"]
+                        ids = {t["name"]: t["id"] for t in tracks}
+                        self.assertEqual(client.get(f"/api/tracks/{ids['failed.flac']}/analysis").status_code, 422)
+                        for name, score in (("low.wav", 0), ("high.wav", 95)):
+                            path = album / name
+                            stat = path.stat()
+                            report = {k: {} for k in ("info", "summary", "spectrum", "spectrogram", "analysis")}
+                            report["forensics"] = {"status": "clear" if score == 0 else "suspicious", "score": score}
+                            app.state.session_cache.write((ids[name], stat.st_size, stat.st_mtime_ns), report)
+                        chosen = [v for k, v in ids.items() if k != "other.wav"]
+                        body = {"track_ids": chosen, "operation": operation, "folder_mode": folder_mode,
+                                "target_folder": str(target), "threshold": 100}
+                        for invalid in (-1, 101, True, "35"):
+                            self.assertEqual(client.post("/api/tracks/transfer/preview", json={**body, "threshold": invalid}).status_code, 422)
+                        self.assertEqual(client.post("/api/tracks/transfer/preview", json={**body, "track_ids": []}).status_code, 422)
+                        self.assertEqual(client.post("/api/tracks/transfer/preview", json={**body, "track_ids": ["unknown"]}).status_code, 404)
+                        preview = client.post("/api/tracks/transfer/preview", json=body)
+                        self.assertEqual(preview.status_code, 200, preview.text)
+                        units = preview.json()["units"]
+                        self.assertEqual(set(t for u in units for t in u["selected_track_ids"]), set(chosen))
+                        before = {p: p.read_bytes() for p in album.iterdir()}
+                        result = client.post("/api/tracks/transfer", json={**body, "threshold": 0,
+                                             "preview_token": preview.json()["preview_token"]})
+                        self.assertEqual(result.status_code, 200, result.text)
+                        affected = set(ids.values()) if folder_mode else set(chosen)
+                        self.assertEqual(set(result.json()["removed_track_ids"]), affected if operation == "move" else set())
+                        for source, content in before.items():
+                            included = folder_mode or ids.get(source.name) in chosen
+                            destination = target / "album" / source.name
+                            self.assertEqual(source.exists(), not (operation == "move" and included))
+                            if included:
+                                self.assertEqual(destination.read_bytes(), content)
+                        for name, track_id in ids.items():
+                            removed = operation == "move" and track_id in affected
+                            if removed:
+                                self.assertEqual(client.get(f"/api/tracks/{track_id}").status_code, 404)
+                                self.assertFalse((app.state.session_cache.directory / f"{track_id}.json").exists())
+                        self.assertEqual(len([p for p in root.rglob("*") if p.suffix in (".wav", ".flac")]),
+                                         len(tracks) - (len(affected) if operation == "move" else 0))
+
     @unittest.skipUnless(find_ffmpeg(), "FFmpeg is required for codec integration tests")
     def test_real_common_audio_codecs(self):
         source = self.write("源音频.wav", np.column_stack([self.tone(), self.tone()]))

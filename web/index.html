@@ -29,10 +29,14 @@
       </form>
       <label class="search-field"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="搜索曲名或文件夹…" aria-label="搜索曲目"></label>
       <div class="library-views"><div class="library-switch" role="group" aria-label="曲库显示方式"><button id="view-tree" type="button" class="active" aria-pressed="true">目录树</button><button id="view-list" type="button" aria-pressed="false">列表</button></div><div id="tree-actions"><button id="expand-folders" class="text-button" type="button">展开</button><span aria-hidden="true"> / </span><button id="collapse-folders" class="text-button" type="button">折叠</button></div></div>
-      <div class="list-actions"><label class="select-all-label"><input id="select-all" type="checkbox">全部文件</label><span id="selection-count">已选 0 首</span><button id="clear-selection" class="text-button" type="button">清空选择</button></div>
+      <section class="library-selection" aria-label="全库选择与整理">
+        <div class="selection-heading"><strong>勾选曲目</strong><span id="selection-count" role="status">已选 0 / 0 首</span></div>
+        <div class="list-actions"><label class="select-all-label"><input id="select-all" type="checkbox" aria-describedby="selection-scope">全库全选</label><button id="clear-selection" class="text-button" type="button">清空勾选</button><button id="invert-selection" class="text-button" type="button">全库反选</button></div>
+        <p id="selection-scope">选择操作覆盖全库，包含搜索隐藏项。</p>
+        <div class="suspicious-actions"><button id="select-suspicious" class="secondary-button" type="button" title="按已分析结果替换当前勾选，包含搜索隐藏项" disabled>勾选可疑 · ≥ 35 分</button><button id="transfer-tracks" class="secondary-button" type="button" aria-haspopup="dialog" disabled>整理勾选</button></div>
+      </section>
       <div class="result-key" aria-label="分析颜色图例"><span>灰：未分析</span><span class="risk-gradient"></span><span>绿：低 → 红：高</span></div>
       <p class="score-help">特征评分 0–100，非真伪概率。文件夹勾选包含全部子文件。</p>
-      <div class="suspicious-actions"><button id="select-suspicious" class="secondary-button" type="button" title="按已分析结果替换当前勾选，包含搜索隐藏项" disabled>勾选可疑 · ≥ 35 分</button><button id="transfer-tracks" class="secondary-button" type="button" disabled>移动／复制</button></div>
       <div id="track-list" class="track-list"><p class="library-empty">扫描文件夹后，在这里勾选曲目。</p></div>
       <div class="library-footer"><button id="analyze-selected" class="primary-button" disabled>分析所选</button><button id="stop-analysis" class="secondary-button" hidden>停止后续分析</button><button id="compare" class="secondary-button compare-button" disabled>生成对比 <span aria-hidden="true">↗</span></button><p id="selection-help">批量分析不限数量 · 2D 对比最多 4 首</p></div>
     </aside>
@@ -44,7 +48,7 @@
       </section>
       <div id="three-controls" class="three-controls" hidden><label>层间距 <input id="layer-gap" type="range" min="0.5" max="2" step="0.1" value="1.1"></label><label>时频图不透明度 <input id="opacity" type="range" min="0.25" max="1" step="0.05" value="0.85"></label><span>拖动旋转 · 滚轮缩放</span><button id="reset-camera" class="text-button">重置视角 ↺</button></div>
       <div id="status" class="status" role="status" aria-live="polite">正在连接本地分析服务…</div>
-      <div id="analysis-progress" class="analysis-progress" hidden><span id="analysis-progress-text" role="status" aria-live="polite"></span><progress id="analysis-meter" value="0" max="1" aria-label="批量分析进度"></progress></div>
+      <div id="analysis-progress" class="analysis-progress" hidden><span id="analysis-progress-text" role="status" aria-live="polite"></span><progress id="analysis-meter" value="0" max="1" aria-label="批量分析进度"></progress><details id="analysis-details"><summary>分析进度详情</summary><p id="analysis-counts"></p><ul id="analysis-active" aria-label="正在处理的全部曲目"></ul><p>仅显示请求处理状态，不提供单文件百分比。</p></details></div>
       <div id="legend" class="track-legend" aria-label="当前图表曲目"></div>
       <div id="empty-state" class="empty-state"><h2>选择曲目后开始分析</h2><p>左侧勾选文件或文件夹 → 分析所选；选择少量曲目 → 生成对比。<br>分析状态直接显示在目录树中，点击「详情」查看依据。</p></div>
       <div id="charts" hidden>
@@ -70,7 +74,7 @@
         <p id="analysis-workers-help">1 为串行处理。更多进程会增加 CPU、内存与临时磁盘占用，数量越大不一定越快；单首歌曲的分析方法保持一致。</p>
         <label for="suspicious-threshold">可疑曲目勾选阈值</label>
         <input id="suspicious-threshold" type="number" min="0" max="100" step="1" inputmode="numeric" required aria-describedby="suspicious-threshold-help" disabled>
-        <p id="suspicious-threshold-help">默认 35 分，选择评分大于或等于此值的已分析曲目。只影响一键勾选与移动／复制范围，不改变分析评分、颜色或判断依据。</p>
+        <p id="suspicious-threshold-help">默认 35 分，选择评分大于或等于此值的已分析曲目。只影响「勾选可疑」，不限制移动／复制范围，不改变分析评分、颜色或判断依据。</p>
         <p id="settings-note" role="status"></p>
         <p id="settings-error" role="alert" hidden></p>
       </div>
@@ -79,22 +83,23 @@
   </dialog>
   <dialog id="transfer-dialog" aria-labelledby="transfer-title">
     <form id="transfer-form">
-      <div class="export-heading"><h2 id="transfer-title">移动／复制可疑曲目</h2><button id="close-transfer" class="secondary-button" type="button">关闭</button></div>
+      <div class="export-heading"><h2 id="transfer-title">移动／复制勾选曲目</h2><button id="close-transfer" class="secondary-button" type="button">关闭</button></div>
       <div class="settings-content transfer-content">
         <p id="transfer-summary"></p>
+        <p id="transfer-busy" role="status" hidden>当前任务进行中，完成后可预览并执行整理。可先填写目标和处理方式。</p>
         <fieldset><legend>处理方式</legend><label><input id="operation-copy" name="transfer-operation" type="radio" value="copy" checked>复制</label><label><input id="operation-move" name="transfer-operation" type="radio" value="move">移动</label></fieldset>
-        <p id="transfer-mode-help"></p>
+        <label class="keep-structure"><input id="folder-mode" type="checkbox">整父目录（递归包含全部文件）</label><p id="transfer-mode-help"></p>
         <label for="transfer-target">目标文件夹（完整路径或 UNC 路径）</label>
         <input id="transfer-target" type="text" required maxlength="4096" spellcheck="false" placeholder="D:\可疑曲目 或 \\NAS\share\可疑曲目">
         <label class="keep-structure"><input id="keep-structure" type="checkbox" checked>保持原有目录结构</label>
         <p id="transfer-root"></p>
         <p>目标存在同名文件或多首曲目映射到同一位置时，会阻止本次操作，不覆盖文件。</p>
-        <ul id="transfer-preview" aria-label="目标路径预览"></ul>
+        <button id="preview-transfer" class="secondary-button" type="button">预览实际范围</button><p id="transfer-totals" role="status"></p><ul id="transfer-preview" aria-label="目标路径预览"></ul>
         <p id="transfer-status" role="status" aria-live="polite"></p>
         <p id="transfer-error" role="alert" hidden></p>
         <ul id="transfer-results" aria-label="文件操作结果"></ul>
       </div>
-      <div class="settings-actions"><button id="cancel-transfer" class="secondary-button" type="button">关闭</button><button id="execute-transfer" class="primary-button" type="submit">开始复制</button></div>
+      <div class="settings-actions"><button id="cancel-transfer" class="secondary-button" type="button">关闭</button><button id="execute-transfer" class="primary-button" type="submit" disabled>确认并执行</button></div>
     </form>
   </dialog>
 </body>

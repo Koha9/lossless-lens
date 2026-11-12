@@ -7,6 +7,12 @@ function selectionSummary(ids, selected) {
 function toggleSelection(ids, selected, checked) {
   for (const id of ids) { if (checked) selected.add(id); else selected.delete(id); }
 }
+function clearSelection(selected) {
+  selected.clear();
+}
+function invertSelection(ids, selected) {
+  for (const id of ids) { if (selected.has(id)) selected.delete(id); else selected.add(id); }
+}
 function meetsSuspiciousThreshold(result, threshold) {
   return ["clear", "suspicious"].includes(result.status) && Number.isFinite(result.score) && result.score >= threshold;
 }
@@ -26,4 +32,4 @@ function summarizeResults(results) {
   return {status, score: worst?.score ?? null,
     label: `已分析 ${completed.length}/${results.length}${suspicious ? ` · 可疑 ${suspicious}` : ""}${worst ? ` · 最高 ${worst.score}` : ""}${failures ? ` · 失败 ${failures}` : ""}${pending ? " · 分析中" : ""}`};
 }
-if (typeof module !== "undefined") module.exports = {selectionSummary, toggleSelection, meetsSuspiciousThreshold, resultLabel, summarizeResults};
+if (typeof module !== "undefined") module.exports = {selectionSummary, toggleSelection, clearSelection, invertSelection, meetsSuspiciousThreshold, resultLabel, summarizeResults};

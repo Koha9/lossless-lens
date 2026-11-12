@@ -44,3 +44,23 @@ test("localization preserves filenames, dollar signs and numeric values", () => 
   assert.equal(translate("01 - Broadband.flac", "en"), "01 - Broadband.flac");
   for (const name of ["constructor", "toString", "__proto__"]) assert.equal(translate(name, "en"), name);
 });
+
+test("scope confirmation, lifecycle counts and recovery paths localize in both languages", () => {
+  for (const source of [
+    "已选 2 / 5 首", "整理勾选 · 2 首", "整理勾选",
+    "本次处理全部 2 首勾选曲目（含搜索隐藏项），无需分析或达到评分阈值。",
+    "取消选择", "反选", "分析进度详情", "确认并执行",
+    "分析中 · 已处理 2 / 6 · 成功 1 · 失败 1 · 未启动 2",
+    "停止中（等待在途请求） · 已处理 2 / 6 · 成功 1 · 失败 1 · 未启动 2",
+    "操作单元 1 · 文件 6 · 目录 2 · 354744 B",
+    "影响音频 3 · 文件 6 · 目录 2 · 354744 B",
+    "移动完成 0 项 · 未完成 1 项。详细结果见操作弹窗。",
+    "已复制，部分源残留：D:/albumA → D:/review/albumA；PermissionError: injected；恢复清单：D:/review/journal.json",
+    "源残留：D:/albumA/one.flac", "目标残留：D:/review/albumA",
+    "已复制，源文件未删除：D:/albumA → D:/review/albumA；PermissionError: injected；恢复清单：D:/review/journal.json",
+    "范围或目标已变化，请重新预览：目标已存在或重复：D:/review/albumA"
+  ]) {
+    assert.equal(/\p{Script=Han}/u.test(translate(source, "en")), false, source);
+    assert.equal(translate(source, "zh-CN"), source);
+  }
+});

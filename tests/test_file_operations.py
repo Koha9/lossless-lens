@@ -2,6 +2,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import tempfile
 import threading
+import subprocess
+import sys
+import json
 import unittest
 from unittest.mock import patch
 
@@ -9,7 +12,7 @@ from fastapi.testclient import TestClient
 import numpy as np
 import soundfile as sf
 
-from file_operations import plan_transfers, execute_transfers
+from file_operations import plan_transfers, execute_transfers, plan_folders, execute_folders
 from web_app import create_app
 
 
@@ -124,6 +127,151 @@ class FileOperationTests(unittest.TestCase):
         self.assertFalse((self.root / "target").exists())
 
 
+class FolderOperationTests(unittest.TestCase):
+    setUp = FileOperationTests.setUp
+    tracks = FileOperationTests.tracks
+
+    def plan(self, keep=True):
+        return plan_folders(self.tracks(), self.music, str(self.root / "target"), keep,
+                            {key: path for key, path, _ in self.tracks()})
+
+    def test_recursive_copy_move_metadata_and_all_bytes(self):
+        album = self.sources[0].parent
+        (album / ".hidden").write_bytes(b"hidden")
+        (album / "art").mkdir()
+        (album / "art/cover.jpg").write_bytes(b"image")
+        (album / "empty").mkdir()
+        before = {p.relative_to(self.music): (p.read_bytes(), p.stat().st_mtime_ns)
+                  for p in self.music.rglob("*") if p.is_file()}
+        target, plans = self.plan()
+        self.assertFalse(target.exists())
+        self.assertEqual(sum(p.preview()["file_count"] for p in plans), 4)
+        self.assertEqual([r["status"] for r in execute_folders(plans, "copy")], ["copied", "copied"])
+        for path, (content, mtime) in before.items():
+            self.assertEqual((target / path).read_bytes(), content)
+            self.assertEqual((target / path).stat().st_mtime_ns, mtime)
+        target2, plans2 = plan_folders(self.tracks(), self.music, str(self.root / "moved"), False, {})
+        self.assertEqual([r["status"] for r in execute_folders(plans2, "move")], ["moved", "moved"])
+        self.assertTrue((target2 / "B/empty").is_dir())
+        self.assertFalse(any(p.exists() for p in self.sources))
+        self.assertEqual(list(self.root.rglob(".lossless-lens-transfer-*.json")), [])
+
+    def test_dedup_and_ancestor_merge(self):
+        nested = self.sources[0].parent / "disc/3.flac"
+        nested.parent.mkdir()
+        nested.write_bytes(b"third")
+        self.sources.extend([self.sources[0], nested])
+        _, plans = self.plan()
+        self.assertEqual(len(plans), 2)
+        self.assertEqual(plans[0].selected_track_ids, ["0", "2", "3"])
+        self.assertEqual(plans[0].preview()["file_count"], 2)
+
+    def test_root_overlap_links_and_conflicts_rejected(self):
+        for target in (self.music, self.sources[0].parent / "inside"):
+            with self.assertRaises(ValueError):
+                plan_folders(self.tracks(), self.music, str(target), True, {})
+        with self.assertRaises(ValueError):
+            plan_folders(self.tracks(), self.sources[0].parent, str(self.root / "t"), True, {})
+        target, _ = self.plan()
+        (target / "A/B").mkdir(parents=True)
+        with self.assertRaises(FileExistsError):
+            self.plan()
+        # Windows junctions do not require symlink creation privileges.
+        if sys.platform == "win32":
+            link = self.sources[0].parent / "junction"
+            subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(self.sources[1].parent)],
+                           check=True, capture_output=True)
+            try:
+                with self.assertRaises(ValueError):
+                    plan_folders(self.tracks(), self.music, str(self.root / "other"), True, {})
+            finally:
+                link.rmdir()
+
+    def test_copy_or_metadata_failure_and_interrupt_preserve_sources(self):
+        for failure in (OSError("disk full"), KeyboardInterrupt(), SystemExit(3)):
+            target, plans = self.plan()
+            with patch("file_operations.shutil.copyfileobj", side_effect=failure):
+                result = execute_folders(plans[:1], "move")[0]
+            self.assertEqual(result["status"], "error")
+            self.assertTrue(all(p.exists() for p in self.sources))
+            self.assertTrue(any(p.endswith(".json") for p in result["residual_targets"]))
+            import shutil
+            shutil.rmtree(target)
+        _, plans = self.plan()
+        with patch("file_operations.shutil.copystat", side_effect=OSError("metadata")):
+            self.assertEqual(execute_folders(plans[:1], "move")[0]["status"], "error")
+        self.assertTrue(all(p.exists() for p in self.sources))
+
+    def test_partial_delete_reports_precise_remaining(self):
+        extra = self.sources[0].parent / "0.flac"
+        extra.write_bytes(b"extra")
+        _, plans = self.plan()
+        unlink = Path.unlink
+        def deny(path, *args, **kwargs):
+            if path == extra:
+                raise PermissionError("locked")
+            return unlink(path, *args, **kwargs)
+        with patch.object(Path, "unlink", deny):
+            result = execute_folders(plans[:1], "move")[0]
+        self.assertEqual(result["status"], "copied_not_removed")
+        self.assertFalse(self.sources[0].exists())
+        self.assertIn(str(extra), result["remaining_sources"])
+        self.assertNotIn(str(self.sources[0]), result["remaining_sources"])
+
+    def test_changed_source_and_destination_race_preserve_source(self):
+        target, plans = self.plan()
+        (self.sources[0].parent / "new.jpg").write_bytes(b"new")
+        self.assertEqual(execute_folders(plans[:1], "move")[0]["status"], "error")
+        self.assertFalse(target.exists())
+        _, plans = self.plan()
+        plans[0].destination.mkdir(parents=True)
+        marker = plans[0].destination / "owner"
+        marker.write_bytes(b"other writer")
+        result = execute_folders(plans[:1], "move")[0]
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(marker.read_bytes(), b"other writer")
+        self.assertTrue(self.sources[0].exists())
+
+    def test_source_mutation_during_directory_copy_prevents_all_deletions(self):
+        import shutil
+        copy = shutil.copyfileobj
+        _, plans = self.plan()
+        def mutate(incoming, outgoing, **kwargs):
+            copy(incoming, outgoing, **kwargs)
+            (self.sources[0].parent / "late.jpg").write_bytes(b"new file during copy")
+        with patch("file_operations.shutil.copyfileobj", side_effect=mutate):
+            result = execute_folders(plans[:1], "move")[0]
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(self.sources[0].read_bytes(), b"audio-0")
+        self.assertTrue((self.sources[0].parent / "late.jpg").exists())
+        self.assertIn(str(self.sources[0]), result["remaining_sources"])
+
+    def test_process_termination_leaves_durable_recovery_manifest_and_source(self):
+        code = '''
+import os, sys
+from pathlib import Path
+from unittest.mock import patch
+from file_operations import plan_folders, execute_folders
+root = Path(sys.argv[1])
+source = root / "aran/A/B/1.flac"
+info = source.stat()
+_, plans = plan_folders([("id", source, (info.st_size, info.st_mtime_ns))],
+                       root / "aran", str(root / "target"), True, {})
+def interrupt(*args, **kwargs):
+    os._exit(23)
+with patch("file_operations.shutil.copyfileobj", side_effect=interrupt):
+    execute_folders(plans, "move")
+'''
+        process = subprocess.run([sys.executable, "-c", code, str(self.root)], capture_output=True)
+        self.assertEqual(process.returncode, 23, process.stderr)
+        manifests = list(self.root.rglob(".lossless-lens-transfer-*.json"))
+        self.assertEqual(len(manifests), 1)
+        record = json.loads(manifests[0].read_text(encoding="utf-8"))
+        self.assertEqual(record["source"], str(self.sources[0].parent))
+        self.assertEqual(self.sources[0].read_bytes(), b"audio-0")
+        self.assertTrue(Path(record["destination"]).exists())
+
+
 class TransferApiTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(dir=Path.cwd())
@@ -158,22 +306,50 @@ class TransferApiTests(unittest.TestCase):
             self.assertEqual((self.root / "moved/1.flac").read_bytes(), original)
             self.assertEqual(client.get(f"/api/tracks/{body['track_ids'][0]}").status_code, 404)
 
-    def test_threshold_unanalyzed_changed_files_and_conflicts_block_writes(self):
+    def test_unanalyzed_and_changed_analysis_sources_ignore_legal_thresholds(self):
         with TestClient(self.app) as client:
             body = self.prepare(client, analyze=False)
-            self.assertEqual(client.post("/api/tracks/transfer", json=body).status_code, 409)
-            client.get(f"/api/tracks/{body['track_ids'][0]}/analysis")
-            self.assertEqual(client.post("/api/tracks/transfer", json={**body, "threshold": 100}).status_code, 409)
-            self.assertFalse((self.root / "target").exists())
-            (self.root / "target/A/B").mkdir(parents=True)
-            target = self.root / "target/A/B/1.flac"
-            target.write_bytes(b"existing")
-            self.assertEqual(client.post("/api/tracks/transfer", json=body).status_code, 409)
-            self.assertEqual(target.read_bytes(), b"existing")
+            for threshold in (0, 35, 100):
+                target = self.root / f"unanalysed-{threshold}"
+                response = client.post("/api/tracks/transfer", json={**body, "threshold": threshold, "target_folder": str(target)})
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual((target / "A/B/1.flac").read_bytes(), self.source.read_bytes())
+                self.assertTrue(self.source.exists())
+            self.assertEqual(client.get(f"/api/tracks/{body['track_ids'][0]}/analysis").status_code, 200)
             with self.source.open("ab") as stream:
-                stream.write(b"changed")
-            self.assertEqual(client.post("/api/tracks/transfer", json={**body, "target_folder": str(self.root / "new")}).status_code, 409)
-            self.assertFalse((self.root / "new").exists())
+                stream.write(b"changed since analysis")
+            response = client.post("/api/tracks/transfer", json={**body, "threshold": 100})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual((self.root / "target/A/B/1.flac").read_bytes(), self.source.read_bytes())
+
+    def test_destination_conflict_never_overwrites_or_changes_source(self):
+        with TestClient(self.app) as client:
+            body = self.prepare(client, analyze=False)
+            original = self.source.read_bytes()
+            target = self.root / "target/A/B/1.flac"
+            target.parent.mkdir(parents=True)
+            target.write_bytes(b"existing")
+            for operation in ("copy", "move"):
+                response = client.post("/api/tracks/transfer", json={**body, "operation": operation})
+                self.assertEqual(response.status_code, 409)
+                self.assertEqual(target.read_bytes(), b"existing")
+                self.assertEqual(self.source.read_bytes(), original)
+
+    def test_changed_source_after_preview_requires_repreview(self):
+        with TestClient(self.app) as client:
+            body = self.prepare(client, analyze=False)
+            for operation in ("copy", "move"):
+                request = {**body, "operation": operation}
+                preview = client.post("/api/tracks/transfer/preview", json=request)
+                self.assertEqual(preview.status_code, 200, preview.text)
+                with self.source.open("ab") as stream:
+                    stream.write(b"changed after preview")
+                changed = self.source.read_bytes()
+                response = client.post("/api/tracks/transfer", json={**request, "preview_token": preview.json()["preview_token"]})
+                self.assertEqual(response.status_code, 409)
+                self.assertIn("重新预览", response.json()["detail"])
+                self.assertEqual(self.source.read_bytes(), changed)
+                self.assertFalse((self.root / "target").exists())
 
     def test_transfer_excludes_scan_analysis_and_other_transfers(self):
         started, release = threading.Event(), threading.Event()
@@ -198,7 +374,7 @@ class TransferApiTests(unittest.TestCase):
     def test_invalid_requests_and_unknown_tracks(self):
         with TestClient(self.app) as client:
             body = self.prepare(client, analyze=False)
-            for change in ({"threshold": -1}, {"threshold": 101}, {"threshold": 2.5}, {"operation": "delete"}, {"track_ids": []}):
+            for change in ({"threshold": -1}, {"threshold": 101}, {"threshold": 2.5}, {"threshold": True}, {"threshold": "35"}, {"operation": "delete"}, {"track_ids": []}):
                 self.assertEqual(client.post("/api/tracks/transfer", json={**body, **change}).status_code, 422)
             self.assertEqual(client.post("/api/tracks/transfer", json={**body, "track_ids": ["missing"]}).status_code, 404)
 
