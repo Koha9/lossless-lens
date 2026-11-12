@@ -1,3 +1,15 @@
 #!/bin/sh
-echo "REFUSED: this project forbids all pushes; stop and report to PM." >&2
-exit 1
+refuse() {
+    echo "REFUSED: only explicitly authorized integration branch publication is allowed." >&2
+    exit 1
+}
+
+[ "${LOSSLESS_LENS_ALLOW_PUBLISH:-0}" = "1" ] || refuse
+[ "$1" = "origin" ] || refuse
+[ "$2" = "https://github.com/Koha9/lossless-lens.git" ] || refuse
+
+while read -r local_ref local_oid remote_ref remote_oid; do
+    [ "$local_ref" = "refs/heads/integration/ll-20261112" ] || refuse
+    [ "$remote_ref" = "refs/heads/integration/ll-20261112" ] || refuse
+    [ "$local_oid" != "0000000000000000000000000000000000000000" ] || refuse
+done

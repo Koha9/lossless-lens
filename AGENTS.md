@@ -1,5 +1,9 @@
 # Lossless Lens 项目地图
 
+## 本次发布授权（2026-11-13）
+- 用户已明确允许PR、push及调整origin禁推地址和pre-push保护，覆盖下文对本次发布的旧禁令。
+- 仅发布 `integration/ll-20261112` 到 `origin` 同名分支，推送时显式设置 `LOSSLESS_LENS_ALLOW_PUBLISH=1`；默认仍禁止推送，master不可推送或合并，不部署。其他worktree仍保持各自禁推设置。
+
 本项目采用 W1 PM → W2 模块 → W3 开发/独立审核。保持既有 FastAPI 与原生 JavaScript 结构。
 
 ## 管理规范
