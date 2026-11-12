@@ -58,11 +58,14 @@ try {
 
     # The Web entry point serves Plotly JS and does not use dataframe or Qt
     # integrations. Do not collect these optional stacks from a full Conda base.
+    # Frozen Python ignores PYTHONUTF8; embed UTF-8 mode so redirected Chinese
+    # help/log output also works on English Windows runners (default cp1252).
     & $Python -m PyInstaller `
         --noconfirm `
         --clean `
         --onedir `
         --console `
+        --python-option 'X utf8' `
         --name LosslessLens `
         --distpath $stagingDist `
         --workpath (Join-Path $buildRoot 'onedir') `
